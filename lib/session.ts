@@ -14,7 +14,7 @@ export async function getSession(): Promise<SessionPayload | null> {
 export async function requireCeo(): Promise<SessionPayload> {
   const session = await getSession();
   if (!session || session.role !== "CEO") {
-    redirect("/dashboard");
+    redirect("/admin/dashboard");
   }
   return session;
 }
@@ -25,7 +25,7 @@ export async function requireCeo(): Promise<SessionPayload> {
 export async function requireFeature(feature: Feature): Promise<SessionPayload> {
   const session = await getSession();
   if (!session) {
-    redirect("/login");
+    redirect("/admin/login");
   }
   if (!canAccess(session.role, feature)) {
     redirect(defaultRouteFor(session.role));

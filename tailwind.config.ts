@@ -34,9 +34,23 @@ const config: Config = {
           serious: "#ec835a",
           critical: "#d03b3b",
         },
+
+        // Paleta do site institucional (Material-3-like) — nomes planos pra
+        // bater com as classes existentes (bg-background, text-on-background
+        // etc.), vindas de quando o site usava Tailwind v4 com @theme inline.
+        background: "#121415",
+        "surface-container-lowest": "#0c0e0f",
+        "surface-container": "#1e2021",
+        "surface-bright": "#38393a",
+        primary: "#f2ca50",
+        "primary-container": "#d4af37",
+        "on-primary-container": "#554300",
+        "on-background": "#ffffff",
+        "outline-variant": "#ffffff",
       },
       fontFamily: {
         sans: ["var(--font-inter)", "system-ui", "-apple-system", "Segoe UI", "sans-serif"],
+        display: ["var(--font-oswald)", "Arial Narrow", "sans-serif"],
       },
     },
   },

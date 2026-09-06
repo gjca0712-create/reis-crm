@@ -47,11 +47,11 @@ export async function POST(request: Request) {
 
   const { sale } = await recordSale({ customerId: customer.id, items, notes: "Pedido feito pelo site" });
 
-  revalidatePath("/vendas");
-  revalidatePath("/dashboard");
-  revalidatePath("/bairros");
-  revalidatePath(`/clientes/${customer.id}`);
-  revalidatePath("/clientes");
+  revalidatePath("/admin/vendas");
+  revalidatePath("/admin/dashboard");
+  revalidatePath("/admin/bairros");
+  revalidatePath(`/admin/clientes/${customer.id}`);
+  revalidatePath("/admin/clientes");
 
   return NextResponse.json({ saleId: sale.id, customerId: customer.id }, { status: 201, headers: CORS_HEADERS });
 }

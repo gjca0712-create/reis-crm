@@ -1,5 +1,5 @@
 import { LogOut } from "lucide-react";
-import { logout } from "@/app/login/actions";
+import { logout } from "@/app/admin/login/actions";
 import { ROLE_LABELS } from "@/lib/constants";
 import { initials } from "@/lib/format";
 import type { SessionPayload } from "@/lib/auth";

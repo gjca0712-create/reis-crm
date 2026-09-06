@@ -1,10 +1,10 @@
 import { NextResponse } from "next/server";
-import { revalidatePath } from "next/cache";
-import { prisma } from "@/lib/prisma";
 import { verifyApiKey, CORS_HEADERS } from "@/lib/apiAuth";
+import { createLeadFromSite } from "@/lib/leads";
 
-// Recebe pedidos de orçamento do site (formulário público) e cria um Lead
-// pra equipe de vendas dar seguimento na aba Leads do CRM.
+// Rota pública (exige x-api-key) — hoje sem uso interno (o próprio site chama
+// app/api/lead, que roda no mesmo app), mantida pra qualquer integração
+// externa futura que precise criar um Lead sem fazer parte deste projeto.
 export async function POST(request: Request) {
   if (!verifyApiKey(request)) {
     return NextResponse.json({ error: "unauthorized" }, { status: 401, headers: CORS_HEADERS });
@@ -20,9 +20,7 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "name e phone são obrigatórios" }, { status: 400, headers: CORS_HEADERS });
   }
 
-  const lead = await prisma.lead.create({ data: { name, phone, email, message } });
-
-  revalidatePath("/leads");
+  const lead = await createLeadFromSite({ name, phone, email, message });
 
   return NextResponse.json({ id: lead.id }, { status: 201, headers: CORS_HEADERS });
 }

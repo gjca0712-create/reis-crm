@@ -3,7 +3,7 @@
 import { useTransition } from "react";
 import { Package, Truck, CheckCircle2, type LucideIcon } from "lucide-react";
 import { DELIVERY_STATUS_LABELS } from "@/lib/constants";
-import { updateDeliveryStatus } from "@/app/(app)/vendas/actions";
+import { updateDeliveryStatus } from "@/app/admin/(app)/vendas/actions";
 
 const STATUS_ICON: Record<string, LucideIcon> = {
   SEPARACAO: Package,

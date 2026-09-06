@@ -2,31 +2,79 @@
 @tailwind components;
 @tailwind utilities;
 
+/* Tokens do site institucional (Material-3-like, extraída ao vivo do site
+   atual) — viram cores do Tailwind em tailwind.config.ts (background,
+   surface-container, primary, etc.), aqui só as variáveis CSS que o
+   Tailwind v4 gerava sozinho antes e que código fora de utilities ainda
+   referencia direto (fontes, ::selection do CRM abaixo não usa essas). */
+:root {
+  --color-background: #121415;
+  --color-surface-container-lowest: #0c0e0f;
+  --color-surface-container: #1e2021;
+  --color-surface-bright: #38393a;
+
+  --color-primary: #f2ca50;
+  --color-primary-container: #d4af37;
+  --color-on-primary-container: #554300;
+  --color-on-background: #ffffff;
+
+  --color-outline-variant: #ffffff;
+
+  --font-body: var(--font-inter), sans-serif;
+  --font-display: var(--font-oswald), "Arial Narrow", sans-serif;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
 html {
+  scroll-behavior: smooth;
+}
+
+.font-display {
+  font-family: var(--font-display);
+}
+
+.font-label-bold {
+  font-family: var(--font-display);
+  letter-spacing: 0.02em;
+}
+
+.text-balance {
+  text-wrap: balance;
+}
+
+/* Tema escuro do CRM — escopado em .bg-page (aplicado só dentro de
+   app/admin/layout.tsx) pra não vazar pro site institucional, que tem seu
+   próprio tema claro/Material-3 acima. */
+.bg-page {
   color-scheme: dark;
 }
 
-body {
-  background-color: #0f0d0a;
-  color: #f7f3ea;
-}
-
-::selection {
+.bg-page ::selection {
   background-color: #d4af37;
   color: #0f0d0a;
 }
 
-::-webkit-scrollbar {
+.bg-page ::-webkit-scrollbar {
   width: 10px;
   height: 10px;
 }
-::-webkit-scrollbar-track {
+.bg-page ::-webkit-scrollbar-track {
   background: #0f0d0a;
 }
-::-webkit-scrollbar-thumb {
+.bg-page ::-webkit-scrollbar-thumb {
   background: #332c22;
   border-radius: 999px;
 }
-::-webkit-scrollbar-thumb:hover {
+.bg-page ::-webkit-scrollbar-thumb:hover {
   background: #4a3f2c;
 }

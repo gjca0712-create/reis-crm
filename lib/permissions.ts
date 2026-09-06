@@ -57,6 +57,6 @@ export function canAccess(role: Role, feature: Feature): boolean {
 // Primeira tela útil pra cada papel depois do login / quando ele bate numa
 // página que não pode ver.
 export function defaultRouteFor(role: Role): string {
-  if (canAccess(role, "dashboard")) return "/dashboard";
-  return "/clientes";
+  if (canAccess(role, "dashboard")) return "/admin/dashboard";
+  return "/admin/clientes";
 }

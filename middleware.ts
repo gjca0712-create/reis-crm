@@ -1,24 +1,16 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { verifySessionToken, SESSION_COOKIE_NAME } from "@/lib/auth";
 
-// /api/site é a API pública que o site externo chama, e /api/whatsapp/bradial
-// é o webhook que o Bradial chama quando chega mensagem no número oficial —
-// nenhum dos dois usa cookie de sessão, cada um tem sua própria autenticação
-// (ver lib/apiAuth.ts e o token checado dentro da rota do webhook).
-const PUBLIC_PATHS = ["/login", "/api/site", "/api/whatsapp/bradial"];
+// Agora que CRM e site são um app só, o middleware só precisa proteger
+// /admin/* — o resto (site institucional, /api/site/*, o webhook do Bradial)
+// não passa mais por checagem de sessão nenhuma (matcher abaixo já filtra
+// isso, então nem precisa de lista de PUBLIC_PATHS como antes).
+const PUBLIC_ADMIN_PATHS = ["/admin/login"];
 
 export async function middleware(request: NextRequest) {
-  // O Next já tira o basePath ("/admin") de nextUrl.pathname por padrão, mas
-  // normalizamos aqui de novo por segurança — assim a lógica abaixo (que
-  // compara contra "/login", "/api/site" etc.) funciona igual não importa o
-  // comportamento exato dessa versão do Next.
-  const BASE_PATH = "/admin";
-  let pathname = request.nextUrl.pathname;
-  if (pathname.startsWith(BASE_PATH)) {
-    pathname = pathname.slice(BASE_PATH.length) || "/";
-  }
+  const { pathname } = request.nextUrl;
 
-  if (PUBLIC_PATHS.some((p) => pathname.startsWith(p))) {
+  if (PUBLIC_ADMIN_PATHS.some((p) => pathname.startsWith(p))) {
     return NextResponse.next();
   }
 
@@ -26,12 +18,12 @@ export async function middleware(request: NextRequest) {
   const session = token ? await verifySessionToken(token) : null;
 
   if (!session) {
-    // clone() em vez de `new URL(path, request.url)`: nextUrl já reaplica o
-    // basePath sozinho ao montar a URL final — por isso o pathname aqui é
-    // "/login" (sem "/admin"), senão o resultado sai duplicado ("/admin/admin/login").
     const loginUrl = request.nextUrl.clone();
-    loginUrl.pathname = "/login";
+    loginUrl.pathname = "/admin/login";
     loginUrl.search = "";
+    // "next" viaja com o prefixo /admin — login/actions.ts (resolveNext,
+    // ROUTE_FEATURES) e lib/permissions.ts (defaultRouteFor) trabalham nesse
+    // mesmo namespace desde a migração pra rota /admin/*.
     loginUrl.searchParams.set("next", pathname);
     return NextResponse.redirect(loginUrl);
   }
@@ -40,5 +32,5 @@ export async function middleware(request: NextRequest) {
 }
 
 export const config = {
-  matcher: ["/((?!_next/static|_next/image|favicon.ico|icon.png|reis-crown.png|reis-logo.png).*)"],
+  matcher: ["/admin/:path*"],
 };

@@ -1,0 +1,21 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="900" height="900" viewBox="0 0 900 900">
+  <defs>
+    <radialGradient id="g1" cx="50%" cy="38%" r="75%">
+      <stop offset="0%" stop-color="#1e2021" />
+      <stop offset="55%" stop-color="#16181a" />
+      <stop offset="100%" stop-color="#0c0e0f" />
+    </radialGradient>
+    <filter id="grain1">
+      <feTurbulence type="fractalNoise" baseFrequency="0.85" numOctaves="2" seed="1" stitchTiles="stitch" />
+      <feColorMatrix type="matrix" values="0 0 0 0 1  0 0 0 0 1  0 0 0 0 1  0 0 0 0.04 0" />
+    </filter>
+  </defs>
+  <rect width="900" height="900" fill="url(#g1)" />
+  <rect width="900" height="900" filter="url(#grain1)" />
+  <g transform="translate(450,450) scale(1.4)" opacity="0.6"><g transform="translate(-60,-55)" stroke="#f2ca50" stroke-width="2.2" fill="none" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M6 110h108" />
+    <path d="M18 110V50l42-30 42 30v60" />
+    <path d="M42 110V74h36v36" />
+  </g></g>
+  <text x="24" y="878" font-family="Arial, sans-serif" font-size="12" letter-spacing="2" fill="#ffffff" opacity="0.3">FOTO ILUSTRATIVA — SUBSTITUIR</text>
+</svg>

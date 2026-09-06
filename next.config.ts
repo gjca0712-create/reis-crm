@@ -1,29 +1,22 @@
 import type { NextConfig } from "next";
 
-// Este app é a "zona" /admin dentro do domínio da Reis — o site institucional
-// (projeto separado, reis-source-para-crm) é a zona padrão e reescreve
-// /admin/* pra cá (ver next.config.ts dele). basePath faz o Next prefixar
-// automaticamente todo link, redirect() e asset deste app com /admin — não
-// precisa mexer em cada `redirect("/login")`/`<Link href="/vendas">` espalhado
-// pelo código. Ver node_modules/next/dist/docs/01-app/02-guides/multi-zones.md.
-const SITE_ORIGIN_DEV = "http://localhost:3120";
-
+// CRM e site institucional agora são um app Next.js só (era Multi-Zones —
+// dois apps separados costurados por rewrites; virou um único projeto por
+// pedido explícito do cliente). Site fica nas rotas normais (app/(site)/*),
+// CRM fica todo debaixo de app/admin/*.
 const nextConfig: NextConfig = {
-  basePath: "/admin",
-
   // Baileys (and its "ws" dependency) must run as real Node modules, not be
   // webpack-bundled — bundling breaks ws's native buffer-masking shim
   // ("bufferUtil.mask is not a function").
   serverExternalPackages: ["@whiskeysockets/baileys"],
 
-  experimental: {
-    serverActions: {
-      // Quem acessa via /admin no site vê o Origin do SITE (o domínio público),
-      // não o deste app — sem isso, toda Server Action (login, salvar venda,
-      // responder WhatsApp etc.) é rejeitada como possível CSRF. Em produção,
-      // trocar pelo domínio real do site.
-      allowedOrigins: [SITE_ORIGIN_DEV.replace(/^https?:\/\//, "")],
-    },
+  images: {
+    // Placeholders de categoria (data/products.ts) são SVG gerados por
+    // scripts/gen-placeholders.mjs e servidos via next/image com src em
+    // string. CSP restrita neutraliza o risco de SVG com script embutido;
+    // remover dangerouslyAllowSVG quando fotos reais (raster) substituírem.
+    dangerouslyAllowSVG: true,
+    contentSecurityPolicy: "default-src 'self'; script-src 'none'; sandbox;",
   },
 };
 
