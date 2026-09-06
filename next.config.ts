@@ -18,6 +18,28 @@ const nextConfig: NextConfig = {
     dangerouslyAllowSVG: true,
     contentSecurityPolicy: "default-src 'self'; script-src 'none'; sandbox;",
   },
+
+  async headers() {
+    return [
+      {
+        source: "/:path*",
+        headers: [
+          // Impede que o site (e o /admin) seja carregado dentro de um
+          // <iframe> de outro domínio — mitiga clickjacking.
+          { key: "X-Frame-Options", value: "DENY" },
+          // Impede o navegador de tentar "adivinhar" o tipo de um arquivo
+          // diferente do Content-Type declarado.
+          { key: "X-Content-Type-Options", value: "nosniff" },
+          // Não vaza a URL completa (com querystring) como referrer pra
+          // sites de terceiro ao clicar num link externo.
+          { key: "Referrer-Policy", value: "strict-origin-when-cross-origin" },
+          // Força HTTPS por 1 ano, incluindo subdomínios — Railway já serve
+          // tudo em HTTPS, isso garante que o navegador nunca tente HTTP.
+          { key: "Strict-Transport-Security", value: "max-age=31536000; includeSubDomains" },
+        ],
+      },
+    ];
+  },
 };
 
 export default nextConfig;

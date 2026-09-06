@@ -10,7 +10,12 @@ import { processInboundWhatsAppMessage, normalizeIncomingPhone } from "@/lib/wha
 const WEBHOOK_TOKEN = process.env.BRADIAL_WEBHOOK_SECRET;
 
 function checkToken(request: NextRequest): boolean {
-  if (!WEBHOOK_TOKEN) return true; // ainda não configurado — libera em dev/teste
+  // Falha FECHADA: sem token configurado, ninguém passa — antes fazia o
+  // oposto (liberava geral), o que deixava essa rota aberta pra qualquer um
+  // na internet injetar mensagens falsas via processInboundWhatsAppMessage.
+  // Como a Reis decidiu não seguir com o Bradial (custo da API oficial a
+  // partir de outubro), essa rota fica desativada até/se um token real vier.
+  if (!WEBHOOK_TOKEN) return false;
   const token = request.nextUrl.searchParams.get("token") ?? request.headers.get("x-webhook-secret");
   return token === WEBHOOK_TOKEN;
 }
