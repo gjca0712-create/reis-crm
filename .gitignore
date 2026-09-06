@@ -1,0 +1,21 @@
+node_modules
+.next
+.wa-auth
+out
+build
+.env
+.env*.local
+*.db
+*.db-journal
+npm-debug.log*
+.DS_Store
+tsconfig.tsbuildinfo
+
+# Esta pasta é compartilhada com outros projetos que NÃO fazem parte do CRM da
+# Reis — nunca podem ir pro repositório/deploy dele.
+/regua/
+/aurum-cell/
+/conferencia-folha/
+/scratch-logo/
+/reis-source-para-crm/
+/entrada-de-nota/

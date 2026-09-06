@@ -1,0 +1,207 @@
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+// Role/Profissao são strings simples em vez de enum nativo do Postgres — mantém
+// os mesmos nomes de coluna/valor de quando o banco era SQLite (sem enum), e os
+// conjuntos de valores válidos continuam vivendo em lib/constants.ts (Role, Profissao).
+
+model User {
+  id           String   @id @default(cuid())
+  name         String
+  email        String   @unique
+  passwordHash String
+  role         String
+  createdAt    DateTime @default(now())
+
+  sentMessages          Message[]
+  resolvedConversations Conversation[]
+  ratings               Rating[]
+  occurrencesReported   Occurrence[]
+}
+
+// Parceiro indicador: pedreiro, eletricista, etc. Recebe o cashback das compras que indicou.
+model Partner {
+  id              String   @id @default(cuid())
+  name            String
+  phone           String
+  profissao       String
+  pixKey          String?
+  notes           String?
+  cashbackBalance Float    @default(0)
+  createdAt       DateTime @default(now())
+
+  customers  Customer[]
+  sales      Sale[]
+  cashbackTx CashbackTransaction[]
+}
+
+model Customer {
+  id            String   @id @default(cuid())
+  name          String
+  phone         String
+  email         String?
+  document      String?
+  address       String?
+  bairro        String
+  city          String   @default("")
+  notes         String?
+  loyaltyPoints Int      @default(0)
+  createdAt     DateTime @default(now())
+  birthday      DateTime?
+  // Fase da obra do cliente: INICIO, MEIO ou FIM — sinaliza que tipo de
+  // material ele tende a precisar comprar em seguida.
+  faseObra      String?
+
+  referredById String?
+  referredBy   Partner? @relation(fields: [referredById], references: [id])
+
+  sales         Sale[]
+  loyaltyTx     LoyaltyTransaction[]
+  conversations Conversation[]
+  ratings       Rating[]
+  occurrences   Occurrence[]
+  leadsConverted Lead[]
+}
+
+model Sale {
+  id             String   @id @default(cuid())
+  customerId     String
+  customer       Customer @relation(fields: [customerId], references: [id])
+  partnerId      String?
+  partner        Partner? @relation(fields: [partnerId], references: [id])
+  total          Float
+  notes          String?
+  pointsEarned   Int
+  cashbackAmount Float
+  // Rastreamento da entrega: SEPARACAO -> EM_ROTA -> ENTREGUE (lib/constants.ts DeliveryStatus).
+  deliveryStatus String   @default("SEPARACAO")
+  date           DateTime @default(now())
+  createdAt      DateTime @default(now())
+
+  items       SaleItem[]
+  occurrences Occurrence[]
+}
+
+// Itens de uma venda — o que de fato foi comprado (produto, quantidade, preço).
+model SaleItem {
+  id          String @id @default(cuid())
+  saleId      String
+  sale        Sale   @relation(fields: [saleId], references: [id])
+  productName String
+  quantity    Float  @default(1)
+  unitPrice   Float
+  subtotal    Float
+}
+
+model LoyaltyTransaction {
+  id         String   @id @default(cuid())
+  customerId String
+  customer   Customer @relation(fields: [customerId], references: [id])
+  points     Int
+  type       String
+  reference  String?
+  createdAt  DateTime @default(now())
+}
+
+model CashbackTransaction {
+  id        String   @id @default(cuid())
+  partnerId String
+  partner   Partner  @relation(fields: [partnerId], references: [id])
+  amount    Float
+  type      String
+  saleId    String?
+  createdAt DateTime @default(now())
+}
+
+model Conversation {
+  id            String   @id @default(cuid())
+  customerId    String
+  customer      Customer @relation(fields: [customerId], references: [id])
+  status        String   @default("OPEN")
+  lastMessageAt DateTime @default(now())
+  createdAt     DateTime @default(now())
+
+  // Preenchido quando um atendente marca a conversa como resolvida — é esse
+  // atendente que fica creditado pela avaliação pedida em seguida.
+  resolvedById    String?
+  resolvedBy      User?    @relation(fields: [resolvedById], references: [id])
+  ratingRequested Boolean  @default(false)
+
+  messages Message[]
+  rating   Rating?
+}
+
+model Message {
+  id             String       @id @default(cuid())
+  conversationId String
+  conversation   Conversation @relation(fields: [conversationId], references: [id])
+  direction      String
+  body           String
+  createdAt      DateTime     @default(now())
+
+  // Quem enviou (só se aplica a mensagens OUT enviadas por um atendente logado).
+  senderId String?
+  sender   User?   @relation(fields: [senderId], references: [id])
+}
+
+// Avaliação do atendimento, coletada do cliente após a conversa ser resolvida.
+model Rating {
+  id             String       @id @default(cuid())
+  conversationId String       @unique
+  conversation   Conversation @relation(fields: [conversationId], references: [id])
+  customerId     String
+  customer       Customer     @relation(fields: [customerId], references: [id])
+  agentId        String?
+  agent          User?        @relation(fields: [agentId], references: [id])
+  score          Int
+  createdAt      DateTime     @default(now())
+}
+
+model Campaign {
+  id           String    @id @default(cuid())
+  name         String
+  message      String
+  segment      String
+  status       String    @default("RASCUNHO")
+  audienceSize Int       @default(0)
+  scheduledAt  DateTime?
+  sentAt       DateTime?
+  createdAt    DateTime  @default(now())
+}
+
+// Erro operacional registrado pela equipe (estoque, separação, entrega,
+// devolução, etc.) — pedido do CEO para acompanhar quantidade e tipo por mês.
+model Occurrence {
+  id           String    @id @default(cuid())
+  type         String
+  description  String?
+  saleId       String?
+  sale         Sale?     @relation(fields: [saleId], references: [id])
+  customerId   String?
+  customer     Customer? @relation(fields: [customerId], references: [id])
+  reportedById String?
+  reportedBy   User?     @relation(fields: [reportedById], references: [id])
+  createdAt    DateTime  @default(now())
+}
+
+// Pedido de orçamento capturado no site (fora deste projeto) — vem via API
+// pública (app/api/site/leads) e some daqui quando vira Customer de verdade.
+model Lead {
+  id          String   @id @default(cuid())
+  name        String
+  phone       String
+  email       String?
+  message     String?
+  status      String   @default("NOVO")
+
+  convertedCustomerId String?
+  convertedCustomer   Customer? @relation(fields: [convertedCustomerId], references: [id])
+
+  createdAt DateTime @default(now())
+}

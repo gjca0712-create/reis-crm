@@ -1,0 +1,17 @@
+# Espelha o .gitignore — esta pasta é compartilhada com outros projetos que
+# NÃO fazem parte do CRM da Reis e nunca podem ir pro deploy dele.
+regua/
+aurum-cell/
+conferencia-folha/
+scratch-logo/
+reis-source-para-crm/
+entrada-de-nota/
+.claude/
+node_modules/
+.next/
+.wa-auth/
+*.db
+*.db-journal
+.env
+.env*.local
+tsconfig.tsbuildinfo

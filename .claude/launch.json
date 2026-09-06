@@ -1,0 +1,65 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "reis-crm",
+      "runtimeExecutable": "C:\\Users\\gjca0\\OneDrive\\Desktop\\test not\\.claude\\run-dev.cmd",
+      "runtimeArgs": [],
+      "port": 3000,
+      "autoPort": true
+    },
+    {
+      "name": "reis-site",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["--prefix", "reis-source-para-crm", "run", "dev"],
+      "port": 3120,
+      "autoPort": true
+    },
+    {
+      "name": "regua",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["--prefix", "regua", "run", "dev"],
+      "port": 3100,
+      "autoPort": true
+    },
+    {
+      "name": "elo-console",
+      "runtimeExecutable": "node",
+      "runtimeArgs": ["C:\\Users\\gjca0\\AppData\\Local\\Temp\\claude\\C--Users-gjca0-OneDrive-Desktop-test-not\\36050ab6-933d-42b4-be04-c97889304fa6\\scratchpad\\serve.cjs"],
+      "port": 4310
+    },
+    {
+      "name": "elo-repo",
+      "runtimeExecutable": "node",
+      "runtimeArgs": ["C:\\Users\\gjca0\\OneDrive\\Desktop\\elo-hackathon\\server.js"],
+      "port": 4311
+    },
+    {
+      "name": "aurum-cell",
+      "runtimeExecutable": "node",
+      "runtimeArgs": ["C:\\Users\\gjca0\\OneDrive\\Desktop\\test not\\aurum-cell\\server.js"],
+      "port": 4320
+    },
+    {
+      "name": "conferencia-painel",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["--prefix", "conferencia-folha", "run", "dev:painel"],
+      "port": 3300,
+      "autoPort": true
+    },
+    {
+      "name": "pdv-fiscal-api",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["--prefix", "C:\\Users\\gjca0\\OneDrive\\Desktop\\PDV-FISCAL\\api-node", "run", "dev"],
+      "port": 3001,
+      "autoPort": true
+    },
+    {
+      "name": "pdv-fiscal",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["--prefix", "C:\\Users\\gjca0\\OneDrive\\Desktop\\PDV-FISCAL", "run", "dev"],
+      "port": 3000,
+      "autoPort": true
+    }
+  ]
+}
