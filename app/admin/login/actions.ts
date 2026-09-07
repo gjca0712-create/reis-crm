@@ -7,6 +7,7 @@ import { verifyPassword } from "@/lib/password";
 import { createSessionToken, SESSION_COOKIE_NAME } from "@/lib/auth";
 import type { Role } from "@/lib/constants";
 import { canAccess, defaultRouteFor, type Feature } from "@/lib/permissions";
+import { isLoginLocked, registerFailedLogin, clearLoginAttempts } from "@/lib/rateLimit";
 
 // Mapeia rota -> feature pra saber se o papel logado pode mesmo acessar o
 // "next" pedido (ex: veio de um link direto ou de um redirect do middleware).
@@ -34,12 +35,24 @@ export async function login(formData: FormData) {
   const password = String(formData.get("password") || "");
   const next = String(formData.get("next") || "");
 
+  // Trava por e-mail (não por IP) — mais simples e já barra o caso comum de
+  // alguém tentando adivinhar a senha de uma conta específica.
+  if (email) {
+    const lock = isLoginLocked(email);
+    if (lock.locked) {
+      redirect(`/admin/login?error=locked&retry=${lock.retryAfterSeconds}&next=${encodeURIComponent(next)}`);
+    }
+  }
+
   const user = email ? await prisma.user.findUnique({ where: { email } }) : null;
   const valid = user ? await verifyPassword(password, user.passwordHash) : false;
 
   if (!user || !valid) {
+    if (email) registerFailedLogin(email);
     redirect(`/admin/login?error=1&next=${encodeURIComponent(next)}`);
   }
+
+  if (email) clearLoginAttempts(email);
 
   const role = user.role as Role;
 

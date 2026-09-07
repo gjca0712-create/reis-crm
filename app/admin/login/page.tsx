@@ -4,11 +4,13 @@ import { login } from "./actions";
 export default async function LoginPage({
   searchParams,
 }: {
-  searchParams: Promise<{ error?: string; next?: string }>;
+  searchParams: Promise<{ error?: string; next?: string; retry?: string }>;
 }) {
   const params = await searchParams;
   const next = params.next || "";
   const hasError = params.error === "1";
+  const isLocked = params.error === "locked";
+  const retryMinutes = Math.ceil(Number(params.retry || 0) / 60);
 
   return (
     <main className="min-h-screen flex items-center justify-center bg-page px-4">
@@ -29,7 +31,13 @@ export default async function LoginPage({
         <form action={login} className="bg-surface border border-border rounded-2xl p-6 space-y-4">
           <input type="hidden" name="next" value={next} />
 
-          {hasError && (
+          {isLocked && (
+            <div className="text-sm text-status-critical bg-status-critical/10 border border-status-critical/30 rounded-lg px-3 py-2">
+              Muitas tentativas erradas. Tente de novo em {retryMinutes} min.
+            </div>
+          )}
+
+          {hasError && !isLocked && (
             <div className="text-sm text-status-critical bg-status-critical/10 border border-status-critical/30 rounded-lg px-3 py-2">
               E-mail ou senha inválidos.
             </div>
