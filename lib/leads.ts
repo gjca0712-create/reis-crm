@@ -1,5 +1,6 @@
 import { revalidatePath } from "next/cache";
 import { prisma } from "@/lib/prisma";
+import { normalizePhone } from "@/lib/phone";
 
 // Lógica compartilhada entre app/api/site/leads (rota pública, exige
 // x-api-key — pra integrações externas futuras) e app/api/lead (chamada
@@ -13,7 +14,7 @@ export async function createLeadFromSite(input: {
   const lead = await prisma.lead.create({
     data: {
       name: input.name,
-      phone: input.phone,
+      phone: normalizePhone(input.phone) || input.phone.trim(),
       email: input.email ?? null,
       message: input.message ?? null,
     },

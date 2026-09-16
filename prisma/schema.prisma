@@ -124,6 +124,9 @@ model Conversation {
   customerId    String
   customer      Customer @relation(fields: [customerId], references: [id])
   status        String   @default("OPEN")
+  // Qual das linhas de WhatsApp da loja (lib/whatsapp/lines.ts) recebeu e atende
+  // essa conversa. A resposta do atendente sai sempre por essa mesma linha.
+  line          String   @default("linha-1")
   lastMessageAt DateTime @default(now())
   createdAt     DateTime @default(now())
 

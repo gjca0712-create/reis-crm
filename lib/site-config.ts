@@ -20,7 +20,9 @@ export const siteConfig = {
   cnpj: "04.917.591/0001-17",
   slogan: "Tradição que edifica.",
   foundedYear: 1996,
-  yearsOfTradition: 25,
+  // Calculado a partir do ano de fundação — não deixar número fixo, que
+  // envelhece (o site já dizia "25 anos" e "Fundada em 1996" na mesma página).
+  yearsOfTradition: new Date().getFullYear() - 1996,
 
   address: {
     street: "R. Esmeraldo Elias de Jesus, 75",

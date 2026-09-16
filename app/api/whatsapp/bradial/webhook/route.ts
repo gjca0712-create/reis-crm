@@ -1,5 +1,6 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { processInboundWhatsAppMessage, normalizeIncomingPhone } from "@/lib/whatsapp/inbound";
+import { DEFAULT_WHATSAPP_LINE } from "@/lib/whatsapp/lines";
 
 // Webhook que o Bradial chama quando o número oficial recebe uma mensagem.
 // Ainda não temos o formato exato do payload (docs.bradial.com.br exige login) —
@@ -60,7 +61,9 @@ export async function POST(request: NextRequest) {
   const phone = rawPhone ? normalizeIncomingPhone(String(rawPhone)) : null;
 
   if (phone && rawText) {
-    await processInboundWhatsAppMessage(phone, String(rawText));
+    // O payload do Bradial ainda não diz por qual número entrou — assume a linha
+    // padrão. Ajustar quando soubermos o formato real (ver TODO acima).
+    await processInboundWhatsAppMessage(DEFAULT_WHATSAPP_LINE, phone, String(rawText));
   }
 
   return NextResponse.json({ ok: true });

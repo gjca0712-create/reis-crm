@@ -3,6 +3,7 @@ import { revalidatePath } from "next/cache";
 import { prisma } from "@/lib/prisma";
 import { verifyApiKey, CORS_HEADERS } from "@/lib/apiAuth";
 import { recordSale, type SaleItemInput } from "@/lib/sales";
+import { normalizePhone } from "@/lib/phone";
 
 type ItemPayload = { productName?: unknown; quantity?: unknown; unitPrice?: unknown };
 
@@ -27,7 +28,7 @@ export async function POST(request: Request) {
 
   const body = await request.json().catch(() => null);
   const name = typeof body?.name === "string" ? body.name.trim() : "";
-  const phone = typeof body?.phone === "string" ? body.phone.trim() : "";
+  const phone = typeof body?.phone === "string" ? normalizePhone(body.phone) : "";
   const bairro = typeof body?.bairro === "string" ? body.bairro.trim() : "";
   const email = typeof body?.email === "string" ? body.email.trim() : null;
   const address = typeof body?.address === "string" ? body.address.trim() : null;

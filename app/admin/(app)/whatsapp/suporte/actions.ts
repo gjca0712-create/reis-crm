@@ -1,20 +1,24 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
+import { redirect } from "next/navigation";
 import { prisma } from "@/lib/prisma";
 import { requireFeature } from "@/lib/session";
 import { startWhatsAppConnection, disconnectWhatsApp } from "@/lib/whatsapp/client";
 import { sendWhatsAppMessage } from "@/lib/whatsapp/send";
+import { isWhatsAppLineId, toWhatsAppLineId } from "@/lib/whatsapp/lines";
 
-export async function connectWhatsAppAction() {
+export async function connectWhatsAppAction(line: string) {
   await requireFeature("whatsapp_suporte");
-  await startWhatsAppConnection();
+  if (!isWhatsAppLineId(line)) return;
+  await startWhatsAppConnection(line);
   revalidatePath("/admin/whatsapp/suporte");
 }
 
-export async function disconnectWhatsAppAction() {
+export async function disconnectWhatsAppAction(line: string) {
   await requireFeature("whatsapp_suporte");
-  await disconnectWhatsApp();
+  if (!isWhatsAppLineId(line)) return;
+  await disconnectWhatsApp(line);
   revalidatePath("/admin/whatsapp/suporte");
 }
 
@@ -31,7 +35,8 @@ export async function sendSupportReply(conversationId: string, formData: FormDat
   });
   if (!conversation) return;
 
-  await sendWhatsAppMessage(conversation.customer.phone, body);
+  // Responde SEMPRE pela mesma linha que recebeu a conversa.
+  const sent = await sendWhatsAppMessage(toWhatsAppLineId(conversation.line), conversation.customer.phone, body);
 
   await prisma.$transaction([
     prisma.message.create({
@@ -41,6 +46,11 @@ export async function sendSupportReply(conversationId: string, formData: FormDat
   ]);
 
   revalidatePath("/admin/whatsapp/suporte");
+
+  // Sempre redireciona pra normalizar a URL (tira um aviso antigo numa reenvio
+  // que deu certo). WhatsApp desconectado: a mensagem fica registrada, mas o
+  // cliente NÃO recebeu — avisa em vez de deixar parecer que foi entregue.
+  redirect(`/admin/whatsapp/suporte?c=${conversationId}${sent ? "" : "&aviso=nao-entregue"}`);
 }
 
 // Marca a conversa como resolvida, credita o atendente e dispara o pedido de
@@ -55,12 +65,18 @@ export async function resolveConversation(conversationId: string) {
   if (!conversation) return;
 
   const ratingMessage = "Como você avalia nosso atendimento? Responda com um número de 1 a 5. Muito obrigado! 🙏";
-  const sent = await sendWhatsAppMessage(conversation.customer.phone, ratingMessage);
+  const sent = await sendWhatsAppMessage(
+    toWhatsAppLineId(conversation.line),
+    conversation.customer.phone,
+    ratingMessage
+  );
 
   await prisma.$transaction([
     prisma.conversation.update({
       where: { id: conversationId },
-      data: { status: "RESOLVED", resolvedById: session.userId, ratingRequested: true },
+      // Só entra em "modo avaliação" (próxima mensagem do cliente vira nota) se o
+      // pedido realmente saiu — senão o cliente responde outra coisa e vira 1-5 sem contexto.
+      data: { status: "RESOLVED", resolvedById: session.userId, ratingRequested: sent },
     }),
     ...(sent
       ? [
@@ -72,4 +88,6 @@ export async function resolveConversation(conversationId: string) {
   ]);
 
   revalidatePath("/admin/whatsapp/suporte");
+
+  redirect(`/admin/whatsapp/suporte?c=${conversationId}${sent ? "" : "&aviso=avaliacao-nao-enviada"}`);
 }

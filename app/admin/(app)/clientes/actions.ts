@@ -3,6 +3,8 @@
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { prisma } from "@/lib/prisma";
+import { requireFeature } from "@/lib/session";
+import { normalizePhone } from "@/lib/phone";
 
 function str(formData: FormData, key: string) {
   const v = formData.get(key);
@@ -16,8 +18,10 @@ function parseDateInput(raw: string): Date | null {
 }
 
 export async function createCustomer(formData: FormData) {
+  await requireFeature("clientes");
+
   const name = str(formData, "name");
-  const phone = str(formData, "phone");
+  const phone = normalizePhone(str(formData, "phone"));
   const bairro = str(formData, "bairro");
   if (!name || !phone || !bairro) {
     throw new Error("Nome, telefone e bairro são obrigatórios.");
@@ -46,8 +50,10 @@ export async function createCustomer(formData: FormData) {
 }
 
 export async function updateCustomer(customerId: string, formData: FormData) {
+  await requireFeature("clientes");
+
   const name = str(formData, "name");
-  const phone = str(formData, "phone");
+  const phone = normalizePhone(str(formData, "phone"));
   const bairro = str(formData, "bairro");
   if (!name || !phone || !bairro) {
     throw new Error("Nome, telefone e bairro são obrigatórios.");

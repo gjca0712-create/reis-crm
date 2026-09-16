@@ -1,26 +1,29 @@
 import { prisma } from "@/lib/prisma";
-import { onlyDigits } from "@/lib/format";
+import { normalizePhone } from "@/lib/phone";
+import type { WhatsAppLineId } from "./lines";
 
 // Lógica de processar mensagem recebida do WhatsApp, compartilhada entre os dois
 // jeitos de receber mensagem que o CRM suporta: a conexão não-oficial (Baileys,
 // lib/whatsapp/client.ts) e o webhook da API oficial via Bradial
 // (app/api/whatsapp/bradial/webhook). Não depende do formato de nenhum dos dois —
-// recebe só o telefone (já sem DDI 55) e o texto.
+// recebe a linha que recebeu a mensagem, o telefone (já sem DDI 55) e o texto.
 
 function parseRatingReply(text: string): number | null {
   const match = text.trim().match(/^([1-5])$/);
   return match ? Number(match[1]) : null;
 }
 
-// Remove tudo que não é dígito e tira o "55" da frente, pra bater com o formato
-// salvo em Customer.phone (sempre sem código do país).
+// Mesma forma canônica usada no cadastro (lib/phone.ts): só dígitos, sem DDI 55.
 export function normalizeIncomingPhone(raw: string): string | null {
-  const digits = onlyDigits(raw);
-  if (!digits) return null;
-  return digits.startsWith("55") ? digits.slice(2) : digits;
+  const digits = normalizePhone(raw);
+  return digits || null;
 }
 
-export async function processInboundWhatsAppMessage(phone: string, text: string): Promise<void> {
+export async function processInboundWhatsAppMessage(
+  line: WhatsAppLineId,
+  phone: string,
+  text: string
+): Promise<void> {
   if (!phone || !text) return;
 
   let customer = await prisma.customer.findFirst({ where: { phone } });
@@ -35,8 +38,10 @@ export async function processInboundWhatsAppMessage(phone: string, text: string)
     });
   }
 
+  // Conversa mais recente do cliente NESSA linha — cada número tem seu próprio
+  // fio; responder por outro número confundiria o cliente (remetente diferente).
   const conversation = await prisma.conversation.findFirst({
-    where: { customerId: customer.id },
+    where: { customerId: customer.id, line },
     orderBy: { lastMessageAt: "desc" },
   });
 
@@ -63,7 +68,7 @@ export async function processInboundWhatsAppMessage(phone: string, text: string)
     conversation && conversation.status !== "RESOLVED"
       ? conversation
       : await prisma.conversation.create({
-          data: { customerId: customer.id, status: "OPEN", lastMessageAt: new Date() },
+          data: { customerId: customer.id, line, status: "OPEN", lastMessageAt: new Date() },
         });
 
   await prisma.$transaction([

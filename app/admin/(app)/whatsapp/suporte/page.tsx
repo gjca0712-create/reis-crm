@@ -2,7 +2,8 @@ import Link from "next/link";
 import { MessageCircle, ExternalLink, CheckCircle2, AlertTriangle } from "lucide-react";
 import { prisma } from "@/lib/prisma";
 import { formatDateTime, whatsappLink } from "@/lib/format";
-import { getWhatsAppState } from "@/lib/whatsapp/client";
+import { getAllWhatsAppStates, ensureAllWhatsAppStarted } from "@/lib/whatsapp/client";
+import { whatsappLineLabel } from "@/lib/whatsapp/lines";
 import { qrToDataUrl } from "@/lib/whatsapp/qr";
 import { Card } from "@/components/ui/Card";
 import { Badge } from "@/components/ui/Badge";
@@ -10,11 +11,32 @@ import { AutoRefresh } from "@/components/whatsapp/AutoRefresh";
 import { requireFeature } from "@/lib/session";
 import { connectWhatsAppAction, disconnectWhatsAppAction, sendSupportReply, resolveConversation } from "./actions";
 
-export default async function WhatsappSuportePage({ searchParams }: { searchParams: Promise<{ c?: string }> }) {
+export default async function WhatsappSuportePage({
+  searchParams,
+}: {
+  searchParams: Promise<{ c?: string; aviso?: string }>;
+}) {
   await requireFeature("whatsapp_suporte");
 
   const params = await searchParams;
-  const waState = getWhatsAppState();
+
+  // Religa cada linha automaticamente se já foi pareada antes e o socket caiu
+  // num deploy/restart. No-op nas que já estão conectadas/conectando.
+  await ensureAllWhatsAppStarted();
+  const waStates = getAllWhatsAppStates();
+
+  const qrByLine: Record<string, string> = {};
+  for (const s of waStates) {
+    if (s.qr) qrByLine[s.line] = await qrToDataUrl(s.qr);
+  }
+  const anyPairing = waStates.some((s) => s.status === "qr" || s.status === "connecting");
+
+  const aviso =
+    params.aviso === "nao-entregue"
+      ? "A resposta foi salva na conversa, mas essa linha do WhatsApp está desconectada — o cliente não recebeu. Reconecte acima e reenvie."
+      : params.aviso === "avaliacao-nao-enviada"
+        ? "A conversa foi marcada como resolvida, mas o pedido de avaliação não foi enviado (linha do WhatsApp desconectada)."
+        : null;
 
   const conversations = await prisma.conversation.findMany({
     orderBy: { lastMessageAt: "desc" },
@@ -34,64 +56,84 @@ export default async function WhatsappSuportePage({ searchParams }: { searchPara
       })
     : null;
 
-  const qrDataUrl = waState.qr ? await qrToDataUrl(waState.qr) : null;
-
   return (
     <div className="space-y-4">
       <div>
         <h1 className="text-xl font-semibold text-ink-primary">WhatsApp Suporte</h1>
-        <p className="text-sm text-ink-muted mt-0.5">Conversas de atendimento com clientes</p>
+        <p className="text-sm text-ink-muted mt-0.5">Conversas de atendimento com clientes · duas linhas</p>
       </div>
 
-      <Card>
-        <div className="flex items-center justify-between flex-wrap gap-3">
-          {waState.status === "connected" ? (
-            <Badge status="good">Conectado{waState.phoneNumber ? ` · ${waState.phoneNumber}` : ""}</Badge>
-          ) : waState.status === "qr" ? (
-            <Badge status="warning">Aguardando leitura do QR code</Badge>
-          ) : waState.status === "connecting" ? (
-            <Badge status="warning">Conectando...</Badge>
-          ) : (
-            <Badge status="critical">Desconectado</Badge>
-          )}
+      {aviso && (
+        <div className="rounded-lg border border-status-critical/30 bg-status-critical/10 px-4 py-3 text-sm text-status-critical">
+          {aviso}
+        </div>
+      )}
 
-          {waState.status === "connected" ? (
-            <form action={disconnectWhatsAppAction}>
-              <button type="submit" className="text-sm text-status-critical hover:underline">
-                Desconectar
-              </button>
-            </form>
-          ) : waState.status === "disconnected" ? (
-            <form action={connectWhatsAppAction}>
-              <button
-                type="submit"
-                className="rounded-lg bg-gold-400 text-page font-semibold px-4 py-2 text-sm hover:bg-gold-300 transition-colors"
-              >
-                Conectar WhatsApp
-              </button>
-            </form>
-          ) : null}
+      <Card>
+        <div className="space-y-3">
+          {waStates.map((s) => (
+            <div key={s.line} className="flex items-center justify-between flex-wrap gap-3">
+              <div className="flex items-center gap-2">
+                <span className="text-sm font-medium text-ink-primary">{whatsappLineLabel(s.line)}</span>
+                {s.status === "connected" ? (
+                  <Badge status="good">Conectado{s.phoneNumber ? ` · ${s.phoneNumber}` : ""}</Badge>
+                ) : s.status === "qr" ? (
+                  <Badge status="warning">Aguardando leitura do QR code</Badge>
+                ) : s.status === "connecting" ? (
+                  <Badge status="warning">Conectando...</Badge>
+                ) : (
+                  <Badge status="critical">Desconectado</Badge>
+                )}
+              </div>
+
+              {s.status === "connected" ? (
+                <form action={disconnectWhatsAppAction.bind(null, s.line)}>
+                  <button type="submit" className="text-sm text-status-critical hover:underline">
+                    Desconectar
+                  </button>
+                </form>
+              ) : s.status === "disconnected" ? (
+                <form action={connectWhatsAppAction.bind(null, s.line)}>
+                  <button
+                    type="submit"
+                    className="rounded-lg bg-gold-400 text-page font-semibold px-4 py-2 text-sm hover:bg-gold-300 transition-colors"
+                  >
+                    Conectar
+                  </button>
+                </form>
+              ) : null}
+            </div>
+          ))}
         </div>
 
-        {qrDataUrl && (
-          <div className="mt-4 flex flex-col items-center gap-3 py-4 border-t border-border">
-            {/* eslint-disable-next-line @next/next/no-img-element */}
-            <img src={qrDataUrl} alt="QR code do WhatsApp" width={256} height={256} className="rounded-lg" />
-            <p className="text-sm text-ink-secondary text-center max-w-sm">
-              Abra o WhatsApp no celular que vai atender → Configurações → Aparelhos conectados → Conectar um
-              aparelho, e escaneie este código.
-            </p>
-          </div>
-        )}
+        {waStates
+          .filter((s) => qrByLine[s.line])
+          .map((s) => (
+            <div key={s.line} className="mt-4 flex flex-col items-center gap-3 py-4 border-t border-border">
+              <p className="text-sm font-medium text-ink-primary">{whatsappLineLabel(s.line)}</p>
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img
+                src={qrByLine[s.line]}
+                alt={`QR code do WhatsApp — ${whatsappLineLabel(s.line)}`}
+                width={256}
+                height={256}
+                className="rounded-lg"
+              />
+              <p className="text-sm text-ink-secondary text-center max-w-sm">
+                No celular da <strong>{whatsappLineLabel(s.line)}</strong>: WhatsApp → Configurações → Aparelhos
+                conectados → Conectar um aparelho, e escaneie este código.
+              </p>
+            </div>
+          ))}
 
-        {(waState.status === "qr" || waState.status === "connecting") && <AutoRefresh />}
+        {/* Rápido enquanto espera o QR; devagar depois, só pra o inbox pegar
+            mensagens novas sem F5 manual. */}
+        <AutoRefresh intervalMs={anyPairing ? 2500 : 12000} />
 
-        {waState.status === "disconnected" && (
-          <p className="text-xs text-ink-muted mt-3">
-            Conexão não-oficial (protocolo do WhatsApp Web), atrelada ao número real que você escanear. Use com
-            cuidado — o WhatsApp pode restringir números que automatizam conversas.
-          </p>
-        )}
+        <p className="text-xs text-ink-muted mt-3">
+          Conexão não-oficial (protocolo do WhatsApp Web), atrelada a cada número escaneado. Use com cuidado — o
+          WhatsApp pode restringir números que automatizam conversas.
+        </p>
       </Card>
 
       <div className="grid grid-cols-1 lg:grid-cols-[320px_1fr] gap-4 h-[calc(100vh-360px)] min-h-[420px]">
@@ -117,6 +159,7 @@ export default async function WhatsappSuportePage({ searchParams }: { searchPara
                   </div>
                   <div className="text-xs text-ink-muted truncate">
                     {c.customer.bairro}
+                    <span className="text-ink-secondary"> · {whatsappLineLabel(c.line)}</span>
                     {c.rating && <span className="text-gold-400"> · {c.rating.score}★</span>}
                   </div>
                 </div>
@@ -132,7 +175,9 @@ export default async function WhatsappSuportePage({ searchParams }: { searchPara
               <div className="flex items-center justify-between px-5 py-3.5 border-b border-border flex-wrap gap-2">
                 <div>
                   <div className="text-sm font-semibold text-ink-primary">{active.customer.name}</div>
-                  <div className="text-xs text-ink-muted">{active.customer.bairro}</div>
+                  <div className="text-xs text-ink-muted">
+                    {active.customer.bairro} · {whatsappLineLabel(active.line)}
+                  </div>
                 </div>
                 <div className="flex items-center gap-3">
                   {active.rating && <Badge status="good">{active.rating.score}★ avaliação</Badge>}
@@ -199,7 +244,7 @@ export default async function WhatsappSuportePage({ searchParams }: { searchPara
                   name="body"
                   required
                   rows={1}
-                  placeholder="Digite uma resposta..."
+                  placeholder={`Responder pela ${whatsappLineLabel(active.line)}...`}
                   className="flex-1 resize-none rounded-lg bg-page border border-border px-3 py-2.5 text-sm text-ink-primary placeholder:text-ink-muted focus:outline-none focus:ring-2 focus:ring-gold-400/50"
                 />
                 <button

@@ -5,6 +5,7 @@ import { redirect } from "next/navigation";
 import { prisma } from "@/lib/prisma";
 import type { Profissao } from "@/lib/constants";
 import { requireFeature } from "@/lib/session";
+import { normalizePhone } from "@/lib/phone";
 
 function str(formData: FormData, key: string) {
   const v = formData.get(key);
@@ -15,7 +16,7 @@ export async function createPartner(formData: FormData) {
   await requireFeature("indicadores");
 
   const name = str(formData, "name");
-  const phone = str(formData, "phone");
+  const phone = normalizePhone(str(formData, "phone"));
   const profissao = str(formData, "profissao") as Profissao;
   if (!name || !phone || !profissao) {
     throw new Error("Nome, telefone e profissão são obrigatórios.");
@@ -39,7 +40,7 @@ export async function updatePartner(partnerId: string, formData: FormData) {
   await requireFeature("indicadores");
 
   const name = str(formData, "name");
-  const phone = str(formData, "phone");
+  const phone = normalizePhone(str(formData, "phone"));
   const profissao = str(formData, "profissao") as Profissao;
   if (!name || !phone || !profissao) {
     throw new Error("Nome, telefone e profissão são obrigatórios.");
