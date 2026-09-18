@@ -1,6 +1,14 @@
 import { prisma } from "@/lib/prisma";
 import { normalizePhone } from "@/lib/phone";
 import type { WhatsAppLineId } from "./lines";
+import type { MediaCategory } from "./media";
+
+export type InboundMedia = {
+  url: string;
+  type: MediaCategory;
+  mimeType: string;
+  fileName?: string;
+};
 
 // Lógica de processar mensagem recebida do WhatsApp, compartilhada entre os dois
 // jeitos de receber mensagem que o CRM suporta: a conexão não-oficial (Baileys,
@@ -19,13 +27,43 @@ export function normalizeIncomingPhone(raw: string): string | null {
   return digits || null;
 }
 
+// Serializa o processamento por telefone. Sem isso, duas mensagens do mesmo
+// número chegando quase juntas (comum — cliente manda "Oi" e "Boa tarde" em
+// sequência) fazem duas execuções concorrentes passarem pelo "findFirst não
+// achou, então cria" ao mesmo tempo e cadastrarem o mesmo cliente/conversa
+// duas vezes. `phone` não tem constraint de unicidade no banco, então isso
+// não é pego pelo Postgres — precisa ser evitado aqui.
+const phoneLocks = new Map<string, Promise<unknown>>();
+
+async function withPhoneLock<T>(phone: string, fn: () => Promise<T>): Promise<T> {
+  const prior = phoneLocks.get(phone) ?? Promise.resolve();
+  const result = prior.then(fn, fn);
+  phoneLocks.set(
+    phone,
+    result.then(
+      () => undefined,
+      () => undefined
+    )
+  );
+  return result;
+}
+
 export async function processInboundWhatsAppMessage(
   line: WhatsAppLineId,
   phone: string,
-  text: string
+  text: string,
+  media?: InboundMedia
 ): Promise<void> {
-  if (!phone || !text) return;
+  if (!phone || (!text && !media)) return;
+  await withPhoneLock(phone, () => processInboundWhatsAppMessageLocked(line, phone, text, media));
+}
 
+async function processInboundWhatsAppMessageLocked(
+  line: WhatsAppLineId,
+  phone: string,
+  text: string,
+  media?: InboundMedia
+): Promise<void> {
   let customer = await prisma.customer.findFirst({ where: { phone } });
   if (!customer) {
     customer = await prisma.customer.create({
@@ -72,7 +110,17 @@ export async function processInboundWhatsAppMessage(
         });
 
   await prisma.$transaction([
-    prisma.message.create({ data: { conversationId: target.id, direction: "IN", body: text } }),
+    prisma.message.create({
+      data: {
+        conversationId: target.id,
+        direction: "IN",
+        body: text,
+        mediaUrl: media?.url,
+        mediaType: media?.type,
+        mediaMimeType: media?.mimeType,
+        mediaFileName: media?.fileName,
+      },
+    }),
     prisma.conversation.update({ where: { id: target.id }, data: { lastMessageAt: new Date(), status: "OPEN" } }),
   ]);
 }

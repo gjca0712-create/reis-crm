@@ -5,8 +5,9 @@ import { redirect } from "next/navigation";
 import { prisma } from "@/lib/prisma";
 import { requireFeature } from "@/lib/session";
 import { startWhatsAppConnection, disconnectWhatsApp } from "@/lib/whatsapp/client";
-import { sendWhatsAppMessage } from "@/lib/whatsapp/send";
+import { sendWhatsAppMessage, sendWhatsAppMedia } from "@/lib/whatsapp/send";
 import { isWhatsAppLineId, toWhatsAppLineId } from "@/lib/whatsapp/lines";
+import { saveMediaBuffer, mediaCategoryFromMimetype } from "@/lib/whatsapp/media";
 
 export async function connectWhatsAppAction(line: string) {
   await requireFeature("whatsapp_suporte");
@@ -23,10 +24,13 @@ export async function disconnectWhatsAppAction(line: string) {
 }
 
 // Envia de verdade se a conexão WhatsApp Web estiver ativa; sempre registra a
-// mensagem internamente, com o atendente logado como remetente.
+// mensagem internamente, com o atendente logado como remetente. Aceita um
+// anexo opcional (campo "media" do formulário) — foto, documento ou áudio.
 export async function sendSupportReply(conversationId: string, formData: FormData) {
   const body = String(formData.get("body") || "").trim();
-  if (!body) return;
+  const mediaFile = formData.get("media");
+  const hasMedia = mediaFile instanceof File && mediaFile.size > 0;
+  if (!body && !hasMedia) return;
 
   const session = await requireFeature("whatsapp_suporte");
   const conversation = await prisma.conversation.findUnique({
@@ -35,12 +39,46 @@ export async function sendSupportReply(conversationId: string, formData: FormDat
   });
   if (!conversation) return;
 
-  // Responde SEMPRE pela mesma linha que recebeu a conversa.
-  const sent = await sendWhatsAppMessage(toWhatsAppLineId(conversation.line), conversation.customer.phone, body);
+  const line = toWhatsAppLineId(conversation.line);
+  const phone = conversation.customer.phone;
+
+  let sent: boolean;
+  let mediaUrl: string | undefined;
+  let mediaType: string | undefined;
+  let mediaMimeType: string | undefined;
+  let mediaFileName: string | undefined;
+
+  if (hasMedia && mediaFile instanceof File) {
+    const buffer = Buffer.from(await mediaFile.arrayBuffer());
+    const mimetype = mediaFile.type || "application/octet-stream";
+    mediaUrl = await saveMediaBuffer(buffer, mimetype, mediaFile.name);
+    mediaType = mediaCategoryFromMimetype(mimetype);
+    mediaMimeType = mimetype;
+    mediaFileName = mediaFile.name || undefined;
+
+    // Responde SEMPRE pela mesma linha que recebeu a conversa.
+    sent = await sendWhatsAppMedia(line, phone, {
+      buffer,
+      mimetype,
+      fileName: mediaFileName,
+      caption: body || undefined,
+    });
+  } else {
+    sent = await sendWhatsAppMessage(line, phone, body);
+  }
 
   await prisma.$transaction([
     prisma.message.create({
-      data: { conversationId, direction: "OUT", body, senderId: session?.userId },
+      data: {
+        conversationId,
+        direction: "OUT",
+        body,
+        senderId: session?.userId,
+        mediaUrl,
+        mediaType,
+        mediaMimeType,
+        mediaFileName,
+      },
     }),
     prisma.conversation.update({ where: { id: conversationId }, data: { lastMessageAt: new Date() } }),
   ]);

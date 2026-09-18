@@ -8,6 +8,7 @@ import { qrToDataUrl } from "@/lib/whatsapp/qr";
 import { Card } from "@/components/ui/Card";
 import { Badge } from "@/components/ui/Badge";
 import { AutoRefresh } from "@/components/whatsapp/AutoRefresh";
+import { ReplyForm } from "@/components/whatsapp/ReplyForm";
 import { requireFeature } from "@/lib/session";
 import { connectWhatsAppAction, disconnectWhatsAppAction, sendSupportReply, resolveConversation } from "./actions";
 
@@ -129,11 +130,6 @@ export default async function WhatsappSuportePage({
         {/* Rápido enquanto espera o QR; devagar depois, só pra o inbox pegar
             mensagens novas sem F5 manual. */}
         <AutoRefresh intervalMs={anyPairing ? 2500 : 12000} />
-
-        <p className="text-xs text-ink-muted mt-3">
-          Conexão não-oficial (protocolo do WhatsApp Web), atrelada a cada número escaneado. Use com cuidado — o
-          WhatsApp pode restringir números que automatizam conversas.
-        </p>
       </Card>
 
       <div className="grid grid-cols-1 lg:grid-cols-[320px_1fr] gap-4 h-[calc(100vh-360px)] min-h-[420px]">
@@ -222,7 +218,25 @@ export default async function WhatsappSuportePage({
                           : "bg-surface-raised text-ink-primary rounded-bl-sm"
                       }`}
                     >
-                      <p>{m.body}</p>
+                      {m.mediaUrl && m.mediaType === "image" && (
+                        // eslint-disable-next-line @next/next/no-img-element
+                        <img
+                          src={`/api/whatsapp/media/${m.mediaUrl}`}
+                          alt={m.mediaFileName ?? "Imagem"}
+                          className="rounded-lg max-w-full max-h-64 object-contain mb-1.5"
+                        />
+                      )}
+                      {m.mediaUrl && m.mediaType !== "image" && (
+                        <a
+                          href={`/api/whatsapp/media/${m.mediaUrl}`}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="flex items-center gap-1.5 underline text-xs mb-1.5 opacity-90"
+                        >
+                          📎 {m.mediaFileName ?? "Abrir arquivo"}
+                        </a>
+                      )}
+                      {m.body && <p>{m.body}</p>}
                       <p className={`text-[10px] mt-1 ${m.direction === "OUT" ? "text-page/70" : "text-ink-muted"}`}>
                         {formatDateTime(m.createdAt)}
                       </p>
@@ -235,25 +249,11 @@ export default async function WhatsappSuportePage({
                 {active.messages.length === 0 && <p className="text-sm text-ink-muted">Nenhuma mensagem ainda.</p>}
               </div>
 
-              <form
-                key={active.messages.length}
+              <ReplyForm
+                formKey={active.id}
                 action={sendSupportReply.bind(null, active.id)}
-                className="border-t border-border p-3 flex items-end gap-2"
-              >
-                <textarea
-                  name="body"
-                  required
-                  rows={1}
-                  placeholder={`Responder pela ${whatsappLineLabel(active.line)}...`}
-                  className="flex-1 resize-none rounded-lg bg-page border border-border px-3 py-2.5 text-sm text-ink-primary placeholder:text-ink-muted focus:outline-none focus:ring-2 focus:ring-gold-400/50"
-                />
-                <button
-                  type="submit"
-                  className="rounded-lg bg-gold-400 text-page font-semibold px-4 py-2.5 text-sm hover:bg-gold-300 transition-colors shrink-0"
-                >
-                  Enviar
-                </button>
-              </form>
+                placeholder={`Responder pela ${whatsappLineLabel(active.line)}...`}
+              />
             </>
           ) : (
             <div className="flex-1 flex items-center justify-center text-sm text-ink-muted">

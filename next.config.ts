@@ -10,6 +10,14 @@ const nextConfig: NextConfig = {
   // ("bufferUtil.mask is not a function").
   serverExternalPackages: ["@whiskeysockets/baileys"],
 
+  // Padrão do Next é 1MB por Server Action — pequeno demais pra anexar foto
+  // (WhatsApp Suporte manda arquivo pelo mesmo formulário/action).
+  experimental: {
+    serverActions: {
+      bodySizeLimit: "15mb",
+    },
+  },
+
   images: {
     // Placeholders de categoria (data/products.ts) são SVG gerados por
     // scripts/gen-placeholders.mjs e servidos via next/image com src em
