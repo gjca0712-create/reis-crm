@@ -93,9 +93,16 @@ export async function startWhatsAppConnection(line: WhatsAppLineId): Promise<voi
     const sock = makeWASocket({ auth: state, logger });
     r.socket = sock;
 
-    sock.ev.on("creds.update", saveCreds);
+    sock.ev.on("creds.update", () => {
+      if (r.socket === sock) void saveCreds();
+    });
 
     sock.ev.on("connection.update", (update) => {
+      // Socket antigo ainda fechando em segundo plano (ex.: logout seguido de
+      // reconexão rápida) — sem isso, o "close" dele chega depois e sobrescreve
+      // o estado de uma conexão nova já aberta, parecendo uma queda sozinha.
+      if (r.socket !== sock) return;
+
       const { connection, lastDisconnect, qr } = update;
 
       if (qr) {
@@ -127,6 +134,7 @@ export async function startWhatsAppConnection(line: WhatsAppLineId): Promise<voi
     });
 
     sock.ev.on("messages.upsert", async ({ messages, type }) => {
+      if (r.socket !== sock) return; // socket antigo — a conexão atual já reprocessa por conta própria
       if (type !== "notify") return;
       for (const msg of messages) {
         await handleIncomingMessage(line, msg, sock).catch((err) => {
