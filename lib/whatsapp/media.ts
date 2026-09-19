@@ -24,9 +24,12 @@ const EXT_BY_MIME: Record<string, string> = {
   "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": "xlsx",
 };
 
-export const MIME_BY_EXT: Record<string, string> = Object.fromEntries(
-  Object.entries(EXT_BY_MIME).map(([mime, ext]) => [ext, mime])
-);
+export const MIME_BY_EXT: Record<string, string> = {
+  ...Object.fromEntries(Object.entries(EXT_BY_MIME).map(([mime, ext]) => [ext, mime])),
+  // Alias que não é a extensão canônica escolhida acima (jpg), mas aparece
+  // sozinho no nome do arquivo com frequência (ex.: anexo do atendente).
+  jpeg: "image/jpeg",
+};
 
 export type MediaCategory = "image" | "video" | "audio" | "document";
 

@@ -1,13 +1,15 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { getSession } from "@/lib/session";
+import { canAccess } from "@/lib/permissions";
 import { readMediaFile, MIME_BY_EXT } from "@/lib/whatsapp/media";
 
-// Serve os anexos de WhatsApp guardados no volume. Exige login (mesma sessão do
-// painel) — sem isso, qualquer um que adivinhasse o nome do arquivo veria fotos
-// de conversa de cliente.
+// Serve os anexos de WhatsApp guardados no volume. Exige a mesma permissão
+// whatsapp_suporte das outras telas/actions do atendimento — só checar login
+// (getSession) deixava um VENDEDOR, que não tem acesso à tela de Suporte,
+// abrir foto/áudio de cliente se descobrisse a URL de um anexo.
 export async function GET(request: NextRequest, { params }: { params: Promise<{ filename: string }> }) {
   const session = await getSession();
-  if (!session) {
+  if (!session || !canAccess(session.role, "whatsapp_suporte")) {
     return new NextResponse("Não autorizado", { status: 401 });
   }
 

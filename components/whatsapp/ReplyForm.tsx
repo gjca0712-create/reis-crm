@@ -10,11 +10,9 @@ import { Paperclip, X } from "lucide-react";
 // nenhuma dessas duas coisas dá pra fazer só com HTML/server action.
 export function ReplyForm({
   action,
-  formKey,
   placeholder,
 }: {
   action: (formData: FormData) => void;
-  formKey: string;
   placeholder: string;
 }) {
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -47,7 +45,7 @@ export function ReplyForm({
   }
 
   return (
-    <form key={formKey} action={action} className="border-t border-border p-3 flex flex-col gap-2">
+    <form action={action} className="border-t border-border p-3 flex flex-col gap-2">
       {fileName && (
         <div className="flex items-center justify-between gap-2 text-xs bg-surface-raised rounded-lg px-3 py-1.5">
           <span className="truncate text-ink-secondary">📎 {fileName}</span>

@@ -260,7 +260,7 @@ export default async function WhatsappSuportePage({
               </div>
 
               <ReplyForm
-                formKey={active.id}
+                key={`${active.id}-${active.messages.length}`}
                 action={sendSupportReply.bind(null, active.id)}
                 placeholder={`Responder pela ${whatsappLineLabel(active.line)}...`}
               />

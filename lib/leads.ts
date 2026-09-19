@@ -14,7 +14,7 @@ export async function createLeadFromSite(input: {
   const lead = await prisma.lead.create({
     data: {
       name: input.name,
-      phone: normalizePhone(input.phone) || input.phone.trim(),
+      phone: normalizePhone(input.phone),
       email: input.email ?? null,
       message: input.message ?? null,
     },

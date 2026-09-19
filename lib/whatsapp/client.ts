@@ -157,9 +157,10 @@ export async function disconnectWhatsApp(line: WhatsAppLineId): Promise<void> {
 }
 
 function jidFor(phone: string): string {
-  const digits = onlyDigits(phone);
-  const withCountry = digits.startsWith("55") ? digits : `55${digits}`;
-  return `${withCountry}@s.whatsapp.net`;
+  // phone chega sempre no formato canônico de lib/phone.ts (DDD + número, SEM
+  // DDI) — prefixar sempre, sem checar "já começa com 55", porque um cliente
+  // de DDD 55 (Santa Maria/RS) teria o DDI adicionado errado se checássemos.
+  return `55${onlyDigits(phone)}@s.whatsapp.net`;
 }
 
 export async function sendWhatsAppMessage(line: WhatsAppLineId, phone: string, text: string): Promise<boolean> {
@@ -194,7 +195,13 @@ export async function sendWhatsAppMedia(line: WhatsAppLineId, phone: string, med
     } else if (category === "video") {
       await r.socket.sendMessage(jid, { video: media.buffer, mimetype: media.mimetype, caption: media.caption });
     } else if (category === "audio") {
+      // WhatsApp não aceita legenda em mensagem de áudio — manda como texto
+      // separado logo em seguida, senão o que o atendente digitou some sem
+      // avisar (o Message.body fica registrado, mas nunca chegaria no cliente).
       await r.socket.sendMessage(jid, { audio: media.buffer, mimetype: media.mimetype });
+      if (media.caption) {
+        await r.socket.sendMessage(jid, { text: media.caption });
+      }
     } else {
       await r.socket.sendMessage(jid, {
         document: media.buffer,
@@ -244,13 +251,12 @@ async function extractMedia(msg: any, sock: WASocket): Promise<ExtractedMedia | 
   const inner = m?.imageMessage || m?.videoMessage || m?.documentMessage || m?.audioMessage;
   if (!inner) return null;
 
-  const kind: MediaCategory = m.imageMessage
-    ? "image"
-    : m.videoMessage
-      ? "video"
-      : m.documentMessage
-        ? "document"
-        : "audio";
+  const mimetype = inner.mimetype || "application/octet-stream";
+  // Classifica pelo mimetype, igual ao envio (mediaCategoryFromMimetype) —
+  // um cliente pode mandar um áudio como "documento" em vez de nota de voz
+  // (m.documentMessage preenchido, mas mimetype "audio/..."); classificar
+  // pelo campo do Baileys faria isso virar link de download em vez de player.
+  const kind: MediaCategory = mediaCategoryFromMimetype(mimetype);
 
   try {
     const buffer = await downloadMediaMessage(msg as WAMessage, "buffer", {}, {
@@ -259,7 +265,7 @@ async function extractMedia(msg: any, sock: WASocket): Promise<ExtractedMedia | 
     });
     return {
       buffer,
-      mimetype: inner.mimetype || "application/octet-stream",
+      mimetype,
       category: kind,
       fileName: inner.fileName ?? undefined,
     };
