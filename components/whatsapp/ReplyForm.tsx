@@ -68,7 +68,7 @@ export function ReplyForm({
           name="media"
           id="wa-reply-media"
           onChange={handleFileChange}
-          accept="image/*,video/*,audio/*,application/pdf"
+          accept="image/*,video/*,audio/*,application/pdf,.doc,.docx,.xls,.xlsx"
           className="hidden"
         />
         <label

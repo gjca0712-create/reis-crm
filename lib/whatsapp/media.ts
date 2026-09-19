@@ -12,9 +12,16 @@ const EXT_BY_MIME: Record<string, string> = {
   "image/webp": "webp",
   "image/gif": "gif",
   "video/mp4": "mp4",
+  "video/webm": "webm",
+  "video/quicktime": "mov",
   "audio/ogg": "ogg",
   "audio/mpeg": "mp3",
+  "audio/mp4": "m4a",
+  "audio/webm": "weba",
   "application/pdf": "pdf",
+  "application/msword": "doc",
+  "application/vnd.openxmlformats-officedocument.wordprocessingml.document": "docx",
+  "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": "xlsx",
 };
 
 export const MIME_BY_EXT: Record<string, string> = Object.fromEntries(
@@ -30,9 +37,16 @@ export function mediaCategoryFromMimetype(mimetype: string): MediaCategory {
   return "document";
 }
 
+// O WhatsApp manda áudio de voz como "audio/ogg; codecs=opus" — sem cortar o
+// "; codecs=..." a comparação exata contra EXT_BY_MIME nunca bate e todo áudio
+// vira ".bin" (sem Content-Type de áudio, o player não toca).
+function baseMimetype(mimetype: string): string {
+  return mimetype.split(";")[0].trim().toLowerCase();
+}
+
 function extensionFor(mimetype: string, fileName?: string): string {
   const fromName = fileName?.includes(".") ? fileName.split(".").pop()?.toLowerCase() : undefined;
-  return fromName || EXT_BY_MIME[mimetype] || "bin";
+  return fromName || EXT_BY_MIME[baseMimetype(mimetype)] || "bin";
 }
 
 // Salva o arquivo em disco com nome aleatório (nunca o nome original — evita

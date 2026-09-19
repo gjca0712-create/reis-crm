@@ -226,7 +226,17 @@ export default async function WhatsappSuportePage({
                           className="rounded-lg max-w-full max-h-64 object-contain mb-1.5"
                         />
                       )}
-                      {m.mediaUrl && m.mediaType !== "image" && (
+                      {m.mediaUrl && m.mediaType === "video" && (
+                        <video
+                          src={`/api/whatsapp/media/${m.mediaUrl}`}
+                          controls
+                          className="rounded-lg max-w-full max-h-64 mb-1.5"
+                        />
+                      )}
+                      {m.mediaUrl && m.mediaType === "audio" && (
+                        <audio src={`/api/whatsapp/media/${m.mediaUrl}`} controls className="w-60 max-w-full mb-1.5" />
+                      )}
+                      {m.mediaUrl && m.mediaType === "document" && (
                         <a
                           href={`/api/whatsapp/media/${m.mediaUrl}`}
                           target="_blank"
