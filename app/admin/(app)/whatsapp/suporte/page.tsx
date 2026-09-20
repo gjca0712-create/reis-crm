@@ -35,9 +35,13 @@ export default async function WhatsappSuportePage({
   const aviso =
     params.aviso === "nao-entregue"
       ? "A resposta foi salva na conversa, mas essa linha do WhatsApp está desconectada — o cliente não recebeu. Reconecte acima e reenvie."
-      : params.aviso === "avaliacao-nao-enviada"
-        ? "A conversa foi marcada como resolvida, mas o pedido de avaliação não foi enviado (linha do WhatsApp desconectada)."
-        : null;
+      : params.aviso === "numero-invalido"
+        ? "A resposta foi salva na conversa, mas o número de telefone salvo para esse contato é inválido — o cliente não recebeu. Corrija o telefone do cliente antes de reenviar."
+        : params.aviso === "avaliacao-nao-enviada"
+          ? "A conversa foi marcada como resolvida, mas o pedido de avaliação não foi enviado (linha do WhatsApp desconectada)."
+          : params.aviso === "avaliacao-numero-invalido"
+            ? "A conversa foi marcada como resolvida, mas o pedido de avaliação não foi enviado (o número de telefone salvo para esse contato é inválido)."
+            : null;
 
   const conversations = await prisma.conversation.findMany({
     orderBy: { lastMessageAt: "desc" },

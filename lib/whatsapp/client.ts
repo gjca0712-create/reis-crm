@@ -177,6 +177,13 @@ function jidFor(phone: string): string | null {
   return `55${digits}@s.whatsapp.net`;
 }
 
+// Usado pela camada de UI pra distinguir, quando um envio falha, se foi por
+// causa da linha desconectada ou de um número salvo inválido (ex.: lixo de
+// LID de antes da correção) — os dois merecem avisos diferentes ao atendente.
+export function isSendablePhone(phone: string): boolean {
+  return jidFor(phone) !== null;
+}
+
 export async function sendWhatsAppMessage(line: WhatsAppLineId, phone: string, text: string): Promise<boolean> {
   const r = runtimeFor(line);
   if (!r.socket || r.status !== "connected") return false;

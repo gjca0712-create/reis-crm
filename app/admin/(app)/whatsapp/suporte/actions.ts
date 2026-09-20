@@ -4,7 +4,7 @@ import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { prisma } from "@/lib/prisma";
 import { requireFeature } from "@/lib/session";
-import { startWhatsAppConnection, disconnectWhatsApp } from "@/lib/whatsapp/client";
+import { startWhatsAppConnection, disconnectWhatsApp, isSendablePhone } from "@/lib/whatsapp/client";
 import { sendWhatsAppMessage, sendWhatsAppMedia } from "@/lib/whatsapp/send";
 import { isWhatsAppLineId, toWhatsAppLineId } from "@/lib/whatsapp/lines";
 import { saveMediaBuffer, mediaCategoryFromMimetype } from "@/lib/whatsapp/media";
@@ -86,9 +86,11 @@ export async function sendSupportReply(conversationId: string, formData: FormDat
   revalidatePath("/admin/whatsapp/suporte");
 
   // Sempre redireciona pra normalizar a URL (tira um aviso antigo numa reenvio
-  // que deu certo). WhatsApp desconectado: a mensagem fica registrada, mas o
-  // cliente NÃO recebeu — avisa em vez de deixar parecer que foi entregue.
-  redirect(`/admin/whatsapp/suporte?c=${conversationId}${sent ? "" : "&aviso=nao-entregue"}`);
+  // que deu certo). Quando não sai, distingue o motivo — linha desconectada ou
+  // número salvo inválido — senão o atendente manda reconectar uma linha que
+  // já está conectada, achando que é isso que está impedindo o envio.
+  const aviso = sent ? null : isSendablePhone(phone) ? "nao-entregue" : "numero-invalido";
+  redirect(`/admin/whatsapp/suporte?c=${conversationId}${aviso ? `&aviso=${aviso}` : ""}`);
 }
 
 // Marca a conversa como resolvida, credita o atendente e dispara o pedido de
@@ -127,5 +129,10 @@ export async function resolveConversation(conversationId: string) {
 
   revalidatePath("/admin/whatsapp/suporte");
 
-  redirect(`/admin/whatsapp/suporte?c=${conversationId}${sent ? "" : "&aviso=avaliacao-nao-enviada"}`);
+  const aviso = sent
+    ? null
+    : isSendablePhone(conversation.customer.phone)
+      ? "avaliacao-nao-enviada"
+      : "avaliacao-numero-invalido";
+  redirect(`/admin/whatsapp/suporte?c=${conversationId}${aviso ? `&aviso=${aviso}` : ""}`);
 }
