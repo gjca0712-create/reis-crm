@@ -1,7 +1,7 @@
 import Link from "next/link";
 import { MessageCircle, ExternalLink, CheckCircle2, AlertTriangle } from "lucide-react";
 import { prisma } from "@/lib/prisma";
-import { formatDateTime, whatsappLink } from "@/lib/format";
+import { formatDateTime, formatPhone, whatsappLink } from "@/lib/format";
 import { getAllWhatsAppStates, ensureAllWhatsAppStarted } from "@/lib/whatsapp/client";
 import { whatsappLineLabel } from "@/lib/whatsapp/lines";
 import { qrToDataUrl } from "@/lib/whatsapp/qr";
@@ -154,7 +154,7 @@ export default async function WhatsappSuportePage({
                     )}
                   </div>
                   <div className="text-xs text-ink-muted truncate">
-                    {c.customer.bairro}
+                    {formatPhone(c.customer.phone)}
                     <span className="text-ink-secondary"> · {whatsappLineLabel(c.line)}</span>
                     {c.rating && <span className="text-gold-400"> · {c.rating.score}★</span>}
                   </div>
@@ -172,7 +172,7 @@ export default async function WhatsappSuportePage({
                 <div>
                   <div className="text-sm font-semibold text-ink-primary">{active.customer.name}</div>
                   <div className="text-xs text-ink-muted">
-                    {active.customer.bairro} · {whatsappLineLabel(active.line)}
+                    {formatPhone(active.customer.phone)} · {active.customer.bairro} · {whatsappLineLabel(active.line)}
                   </div>
                 </div>
                 <div className="flex items-center gap-3">

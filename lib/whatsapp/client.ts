@@ -164,19 +164,31 @@ export async function disconnectWhatsApp(line: WhatsAppLineId): Promise<void> {
   r.phoneNumber = null;
 }
 
-function jidFor(phone: string): string {
+function jidFor(phone: string): string | null {
   // phone chega sempre no formato canônico de lib/phone.ts (DDD + número, SEM
   // DDI) — prefixar sempre, sem checar "já começa com 55", porque um cliente
   // de DDD 55 (Santa Maria/RS) teria o DDI adicionado errado se checássemos.
-  return `55${onlyDigits(phone)}@s.whatsapp.net`;
+  const digits = onlyDigits(phone);
+  // DDD (2) + fixo (8) ou celular (9) = 10 ou 11 dígitos. Fora disso é lixo
+  // (ex.: um LID do WhatsApp salvo por engano antes da correção) — o Baileys
+  // não valida o JID na hora de mandar, então sem essa checagem a mensagem
+  // "sai" com sucesso e nunca chega em lugar nenhum, sem nenhum aviso.
+  if (digits.length !== 10 && digits.length !== 11) return null;
+  return `55${digits}@s.whatsapp.net`;
 }
 
 export async function sendWhatsAppMessage(line: WhatsAppLineId, phone: string, text: string): Promise<boolean> {
   const r = runtimeFor(line);
   if (!r.socket || r.status !== "connected") return false;
 
+  const jid = jidFor(phone);
+  if (!jid) {
+    console.error(`Número inválido, não é possível enviar via WhatsApp (${line}):`, phone);
+    return false;
+  }
+
   try {
-    await r.socket.sendMessage(jidFor(phone), { text });
+    await r.socket.sendMessage(jid, { text });
     return true;
   } catch (err) {
     console.error(`Erro ao enviar mensagem via WhatsApp (${line}):`, err);
@@ -195,6 +207,10 @@ export async function sendWhatsAppMedia(line: WhatsAppLineId, phone: string, med
   const r = runtimeFor(line);
   if (!r.socket || r.status !== "connected") return false;
   const jid = jidFor(phone);
+  if (!jid) {
+    console.error(`Número inválido, não é possível enviar mídia via WhatsApp (${line}):`, phone);
+    return false;
+  }
   const category = mediaCategoryFromMimetype(media.mimetype);
 
   try {
