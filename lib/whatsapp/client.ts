@@ -227,8 +227,13 @@ export async function sendWhatsAppMedia(line: WhatsAppLineId, phone: string, med
 
 // --- Tratamento de mensagens recebidas -----------------------------------------
 
-function extractPhoneFromJid(jid: string | null | undefined): string | null {
-  if (!jid || jid.endsWith("@g.us")) return null; // ignora mensagens de grupo
+// remoteJid às vezes vem como "@lid" (identificador anônimo que o WhatsApp
+// passou a usar pra alguns contatos) em vez do número de telefone real — nesse
+// caso o telefone de verdade vem em key.senderPn. Sem isso, o número salvo é
+// lixo (o próprio LID) e a resposta nunca chega a lugar nenhum.
+function extractPhoneFromJid(key: { remoteJid?: string | null; senderPn?: string | null } | null | undefined): string | null {
+  const jid = key?.senderPn || key?.remoteJid;
+  if (!jid || jid.endsWith("@g.us") || jid.endsWith("@lid")) return null;
   return normalizeIncomingPhone(jid.split("@")[0].split(":")[0]);
 }
 
@@ -286,7 +291,7 @@ async function extractMedia(msg: any, sock: WASocket): Promise<ExtractedMedia | 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 async function handleIncomingMessage(line: WhatsAppLineId, msg: any, sock: WASocket) {
   if (msg.key?.fromMe) return;
-  const phone = extractPhoneFromJid(msg.key?.remoteJid);
+  const phone = extractPhoneFromJid(msg.key);
   if (!phone) return;
 
   const text = extractText(msg);
