@@ -1,5 +1,6 @@
 import { prisma } from "@/lib/prisma";
 import { normalizePhone } from "@/lib/phone";
+import { formatPhone } from "@/lib/format";
 import type { WhatsAppLineId } from "./lines";
 import type { MediaCategory } from "./media";
 
@@ -52,23 +53,29 @@ export async function processInboundWhatsAppMessage(
   line: WhatsAppLineId,
   phone: string,
   text: string,
-  media?: InboundMedia
+  media?: InboundMedia,
+  pushName?: string | null
 ): Promise<void> {
   if (!phone || (!text && !media)) return;
-  await withPhoneLock(phone, () => processInboundWhatsAppMessageLocked(line, phone, text, media));
+  await withPhoneLock(phone, () => processInboundWhatsAppMessageLocked(line, phone, text, media, pushName));
 }
 
 async function processInboundWhatsAppMessageLocked(
   line: WhatsAppLineId,
   phone: string,
   text: string,
-  media?: InboundMedia
+  media?: InboundMedia,
+  pushName?: string | null
 ): Promise<void> {
   let customer = await prisma.customer.findFirst({ where: { phone } });
   if (!customer) {
+    // Igual ao WhatsApp Web: usa o nome que a própria pessoa colocou no perfil
+    // dela (pushName) quando o número ainda não está "salvo" (não temos esse
+    // conceito de agenda — todo contato novo cai aqui); sem isso, mostra o
+    // telefone inteiro em vez de um "Contato 1234" sem sentido nenhum.
     customer = await prisma.customer.create({
       data: {
-        name: `Contato ${phone.slice(-4)}`,
+        name: pushName?.trim() || formatPhone(phone),
         phone,
         bairro: "Não informado",
         notes: "Cadastrado automaticamente a partir de uma mensagem recebida no WhatsApp.",

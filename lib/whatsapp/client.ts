@@ -4,8 +4,10 @@ import makeWASocket, {
   useMultiFileAuthState,
   DisconnectReason,
   downloadMediaMessage,
+  fetchLatestBaileysVersion,
   type WASocket,
   type WAMessage,
+  type proto,
 } from "@whiskeysockets/baileys";
 import type { Boom } from "@hapi/boom";
 import pino from "pino";
@@ -32,8 +34,30 @@ type WhatsAppRuntime = {
 };
 
 // globalThis para sobreviver ao hot-reload do Next em dev, igual ao lib/prisma.ts.
-const globalForWa = globalThis as unknown as { __waRuntimes?: Map<string, WhatsAppRuntime> };
+const globalForWa = globalThis as unknown as {
+  __waRuntimes?: Map<string, WhatsAppRuntime>;
+  __waSentMessages?: Map<string, proto.IMessage>;
+};
 const runtimes: Map<string, WhatsAppRuntime> = globalForWa.__waRuntimes ?? (globalForWa.__waRuntimes = new Map());
+
+// Cache do conteúdo das últimas mensagens enviadas, usado pelo `getMessage` do
+// socket (ver startWhatsAppConnection). Sem isso, quando o WhatsApp de quem
+// recebe pede reenvio por falha de descriptografia, o Baileys não tem o que
+// reenviar e a mensagem fica travada como "Aguardando mensagem" pra sempre.
+const MAX_SENT_MESSAGES_CACHED = 500;
+const sentMessages: Map<string, proto.IMessage> =
+  globalForWa.__waSentMessages ?? (globalForWa.__waSentMessages = new Map());
+
+function rememberSentMessage(msg: WAMessage | undefined): void {
+  const id = msg?.key?.id;
+  if (!id || !msg.message) return;
+  sentMessages.delete(id);
+  sentMessages.set(id, msg.message);
+  if (sentMessages.size > MAX_SENT_MESSAGES_CACHED) {
+    const oldest = sentMessages.keys().next().value;
+    if (oldest) sentMessages.delete(oldest);
+  }
+}
 
 function runtimeFor(line: WhatsAppLineId): WhatsAppRuntime {
   let r = runtimes.get(line);
@@ -49,6 +73,22 @@ function authDir(line: WhatsAppLineId): string {
 }
 
 const logger = pino({ level: "warn" });
+
+// A versão do protocolo do WhatsApp Web muda com frequência; usar uma versão
+// desatualizada (o padrão embutido no pacote) é uma causa clássica de mensagem
+// "presa" no destinatário. Busca uma vez por processo e reaproveita — se a
+// busca falhar (rede instável), cai no padrão do pacote em vez de travar a conexão.
+let cachedVersion: [number, number, number] | null = null;
+async function getBaileysVersion(): Promise<[number, number, number] | undefined> {
+  if (cachedVersion) return cachedVersion;
+  try {
+    const { version } = await fetchLatestBaileysVersion();
+    cachedVersion = version;
+    return version;
+  } catch {
+    return undefined;
+  }
+}
 
 export function getWhatsAppState(line: WhatsAppLineId) {
   const r = runtimeFor(line);
@@ -89,8 +129,16 @@ export async function startWhatsAppConnection(line: WhatsAppLineId): Promise<voi
 
   try {
     const { state, saveCreds } = await useMultiFileAuthState(authDir(line));
+    const version = await getBaileysVersion();
 
-    const sock = makeWASocket({ auth: state, logger });
+    const sock = makeWASocket({
+      auth: state,
+      logger,
+      ...(version ? { version } : {}),
+      // Ver comentário acima de `sentMessages` — sem isso, um pedido de
+      // reenvio por falha de descriptografia não tem o que reenviar.
+      getMessage: async (key) => (key.id ? sentMessages.get(key.id) : undefined),
+    });
     r.socket = sock;
 
     sock.ev.on("creds.update", () => {
@@ -195,7 +243,8 @@ export async function sendWhatsAppMessage(line: WhatsAppLineId, phone: string, t
   }
 
   try {
-    await r.socket.sendMessage(jid, { text });
+    const sent = await r.socket.sendMessage(jid, { text });
+    rememberSentMessage(sent);
     return true;
   } catch (err) {
     console.error(`Erro ao enviar mensagem via WhatsApp (${line}):`, err);
@@ -222,24 +271,30 @@ export async function sendWhatsAppMedia(line: WhatsAppLineId, phone: string, med
 
   try {
     if (category === "image") {
-      await r.socket.sendMessage(jid, { image: media.buffer, mimetype: media.mimetype, caption: media.caption });
+      rememberSentMessage(
+        await r.socket.sendMessage(jid, { image: media.buffer, mimetype: media.mimetype, caption: media.caption })
+      );
     } else if (category === "video") {
-      await r.socket.sendMessage(jid, { video: media.buffer, mimetype: media.mimetype, caption: media.caption });
+      rememberSentMessage(
+        await r.socket.sendMessage(jid, { video: media.buffer, mimetype: media.mimetype, caption: media.caption })
+      );
     } else if (category === "audio") {
       // WhatsApp não aceita legenda em mensagem de áudio — manda como texto
       // separado logo em seguida, senão o que o atendente digitou some sem
       // avisar (o Message.body fica registrado, mas nunca chegaria no cliente).
-      await r.socket.sendMessage(jid, { audio: media.buffer, mimetype: media.mimetype });
+      rememberSentMessage(await r.socket.sendMessage(jid, { audio: media.buffer, mimetype: media.mimetype }));
       if (media.caption) {
-        await r.socket.sendMessage(jid, { text: media.caption });
+        rememberSentMessage(await r.socket.sendMessage(jid, { text: media.caption }));
       }
     } else {
-      await r.socket.sendMessage(jid, {
-        document: media.buffer,
-        mimetype: media.mimetype,
-        fileName: media.fileName ?? "arquivo",
-        caption: media.caption,
-      });
+      rememberSentMessage(
+        await r.socket.sendMessage(jid, {
+          document: media.buffer,
+          mimetype: media.mimetype,
+          fileName: media.fileName ?? "arquivo",
+          caption: media.caption,
+        })
+      );
     }
     return true;
   } catch (err) {
@@ -321,16 +376,26 @@ async function handleIncomingMessage(line: WhatsAppLineId, msg: any, sock: WASoc
   const media = await extractMedia(msg, sock);
   if (!text && !media) return;
 
+  // pushName: nome que a própria pessoa colocou no perfil do WhatsApp dela —
+  // é isso que o WhatsApp Web mostra pra contato ainda não salvo na agenda.
+  const pushName: string | null = msg.pushName || null;
+
   if (!media) {
-    await processInboundWhatsAppMessage(line, phone, text);
+    await processInboundWhatsAppMessage(line, phone, text, undefined, pushName);
     return;
   }
 
   const savedName = await saveMediaBuffer(media.buffer, media.mimetype, media.fileName);
-  await processInboundWhatsAppMessage(line, phone, text, {
-    url: savedName,
-    type: media.category,
-    mimeType: media.mimetype,
-    fileName: media.fileName,
-  });
+  await processInboundWhatsAppMessage(
+    line,
+    phone,
+    text,
+    {
+      url: savedName,
+      type: media.category,
+      mimeType: media.mimetype,
+      fileName: media.fileName,
+    },
+    pushName
+  );
 }
