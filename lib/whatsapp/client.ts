@@ -37,6 +37,7 @@ type WhatsAppRuntime = {
 const globalForWa = globalThis as unknown as {
   __waRuntimes?: Map<string, WhatsAppRuntime>;
   __waSentMessages?: Map<string, proto.IMessage>;
+  __waProcessedPhoneReplies?: Set<string>;
 };
 const runtimes: Map<string, WhatsAppRuntime> = globalForWa.__waRuntimes ?? (globalForWa.__waRuntimes = new Map());
 
@@ -57,6 +58,25 @@ function rememberSentMessage(msg: WAMessage | undefined): void {
     const oldest = sentMessages.keys().next().value;
     if (oldest) sentMessages.delete(oldest);
   }
+}
+
+// Registra resposta mandada direto do celular pareado (fora do notify normal
+// — ver comentário no listener de messages.upsert). Guarda o id de quem já
+// foi processado pra não duplicar: uma reconexão pode reenviar a mesma
+// mensagem de sincronia de novo, e sem isso ela entraria de novo no CRM.
+const MAX_PROCESSED_PHONE_REPLIES = 500;
+const processedPhoneReplyIds: Set<string> =
+  globalForWa.__waProcessedPhoneReplies ?? (globalForWa.__waProcessedPhoneReplies = new Set());
+
+function alreadyProcessedPhoneReply(id: string | undefined): boolean {
+  if (!id) return false;
+  if (processedPhoneReplyIds.has(id)) return true;
+  processedPhoneReplyIds.add(id);
+  if (processedPhoneReplyIds.size > MAX_PROCESSED_PHONE_REPLIES) {
+    const oldest = processedPhoneReplyIds.values().next().value;
+    if (oldest) processedPhoneReplyIds.delete(oldest);
+  }
+  return false;
 }
 
 function runtimeFor(line: WhatsAppLineId): WhatsAppRuntime {
@@ -183,8 +203,14 @@ export async function startWhatsAppConnection(line: WhatsAppLineId): Promise<voi
 
     sock.ev.on("messages.upsert", async ({ messages, type }) => {
       if (r.socket !== sock) return; // socket antigo — a conexão atual já reprocessa por conta própria
-      if (type !== "notify") return;
       for (const msg of messages) {
+        // Mensagem de cliente de verdade só entra como "notify" (evita
+        // reprocessar sincronia de histórico antigo toda vez que reconecta).
+        // Resposta mandada direto do celular pareado (fromMe), porém, às
+        // vezes chega como "append" em vez de "notify" — o WhatsApp não trata
+        // sincronia entre aparelhos do mesmo dono como "notificação" — então
+        // essa é liberada mesmo fora do notify (com dedupe por id, ver acima).
+        if (type !== "notify" && !msg.key?.fromMe) continue;
         await handleIncomingMessage(line, msg, sock).catch((err) => {
           console.error(`Erro ao processar mensagem recebida do WhatsApp (${line}):`, err);
         });
@@ -373,6 +399,7 @@ async function handleReplyFromPhone(line: WhatsAppLineId, msg: any, sock: WASock
   // resposta enviada pelo CRM.
   const id: string | undefined = msg.key?.id;
   if (id && sentMessages.has(id)) return;
+  if (alreadyProcessedPhoneReply(id)) return;
 
   const phone = extractPhoneFromJid(msg.key);
   if (!phone) return;

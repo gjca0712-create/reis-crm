@@ -2,14 +2,24 @@ export function formatCurrency(value: number) {
   return new Intl.NumberFormat("pt-BR", { style: "currency", currency: "BRL" }).format(value);
 }
 
+// Fuso da loja (Cruz das Almas, Bahia) — sem isso, o Intl.DateTimeFormat usa o
+// fuso do container (Railway roda em UTC), mostrando toda data/hora 3h à frente
+// do horário real da Bahia.
+const STORE_TIMEZONE = "America/Bahia";
+
 export function formatDate(date: Date | string) {
-  return new Intl.DateTimeFormat("pt-BR", { day: "2-digit", month: "2-digit", year: "numeric" }).format(
-    new Date(date)
-  );
+  return new Intl.DateTimeFormat("pt-BR", {
+    day: "2-digit",
+    month: "2-digit",
+    year: "numeric",
+    timeZone: STORE_TIMEZONE,
+  }).format(new Date(date));
 }
 
 export function formatBirthday(date: Date | string) {
-  return new Intl.DateTimeFormat("pt-BR", { day: "2-digit", month: "2-digit" }).format(new Date(date));
+  return new Intl.DateTimeFormat("pt-BR", { day: "2-digit", month: "2-digit", timeZone: STORE_TIMEZONE }).format(
+    new Date(date)
+  );
 }
 
 export function formatDateTime(date: Date | string) {
@@ -19,6 +29,7 @@ export function formatDateTime(date: Date | string) {
     year: "numeric",
     hour: "2-digit",
     minute: "2-digit",
+    timeZone: STORE_TIMEZONE,
   }).format(new Date(date));
 }
 
