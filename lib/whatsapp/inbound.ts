@@ -131,3 +131,49 @@ async function processInboundWhatsAppMessageLocked(
     prisma.conversation.update({ where: { id: target.id }, data: { lastMessageAt: new Date(), status: "OPEN" } }),
   ]);
 }
+
+// Quando um atendente responde direto pelo celular pareado (fora do formulário
+// do CRM), o Baileys entrega essa mensagem como "fromMe" também — sem
+// registrar, ela fica invisível pro resto da equipe olhando o CRM depois.
+// Só entra em cima de conversa que JÁ existe: o celular pareado pode servir
+// pra outras conversas fora do CRM, então não cria cliente/conversa novo aqui.
+export async function processOutboundFromPhone(
+  line: WhatsAppLineId,
+  phone: string,
+  text: string,
+  media?: InboundMedia
+): Promise<void> {
+  if (!phone || (!text && !media)) return;
+  await withPhoneLock(phone, () => processOutboundFromPhoneLocked(line, phone, text, media));
+}
+
+async function processOutboundFromPhoneLocked(
+  line: WhatsAppLineId,
+  phone: string,
+  text: string,
+  media?: InboundMedia
+): Promise<void> {
+  const customer = await prisma.customer.findFirst({ where: { phone } });
+  if (!customer) return;
+
+  const conversation = await prisma.conversation.findFirst({
+    where: { customerId: customer.id, line },
+    orderBy: { lastMessageAt: "desc" },
+  });
+  if (!conversation) return;
+
+  await prisma.$transaction([
+    prisma.message.create({
+      data: {
+        conversationId: conversation.id,
+        direction: "OUT",
+        body: text,
+        mediaUrl: media?.url,
+        mediaType: media?.type,
+        mediaMimeType: media?.mimeType,
+        mediaFileName: media?.fileName,
+      },
+    }),
+    prisma.conversation.update({ where: { id: conversation.id }, data: { lastMessageAt: new Date() } }),
+  ]);
+}

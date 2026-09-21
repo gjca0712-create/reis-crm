@@ -12,7 +12,7 @@ import makeWASocket, {
 import type { Boom } from "@hapi/boom";
 import pino from "pino";
 import { onlyDigits } from "@/lib/format";
-import { processInboundWhatsAppMessage, normalizeIncomingPhone } from "./inbound";
+import { processInboundWhatsAppMessage, processOutboundFromPhone, normalizeIncomingPhone } from "./inbound";
 import { WHATSAPP_LINE_IDS, type WhatsAppLineId } from "./lines";
 import { saveMediaBuffer, mediaCategoryFromMimetype, type MediaCategory } from "./media";
 
@@ -367,8 +367,40 @@ async function extractMedia(msg: any, sock: WASocket): Promise<ExtractedMedia | 
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
+async function handleReplyFromPhone(line: WhatsAppLineId, msg: any, sock: WASocket) {
+  // Eco da própria mensagem que o CRM mandou (sendSupportReply etc.) — essa já
+  // foi registrada na hora pela action; sem essa checagem duplicaria toda
+  // resposta enviada pelo CRM.
+  const id: string | undefined = msg.key?.id;
+  if (id && sentMessages.has(id)) return;
+
+  const phone = extractPhoneFromJid(msg.key);
+  if (!phone) return;
+
+  const text = extractText(msg);
+  const media = await extractMedia(msg, sock);
+  if (!text && !media) return;
+
+  if (!media) {
+    await processOutboundFromPhone(line, phone, text);
+    return;
+  }
+
+  const savedName = await saveMediaBuffer(media.buffer, media.mimetype, media.fileName);
+  await processOutboundFromPhone(line, phone, text, {
+    url: savedName,
+    type: media.category,
+    mimeType: media.mimetype,
+    fileName: media.fileName,
+  });
+}
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
 async function handleIncomingMessage(line: WhatsAppLineId, msg: any, sock: WASocket) {
-  if (msg.key?.fromMe) return;
+  if (msg.key?.fromMe) {
+    await handleReplyFromPhone(line, msg, sock);
+    return;
+  }
   const phone = extractPhoneFromJid(msg.key);
   if (!phone) return;
 

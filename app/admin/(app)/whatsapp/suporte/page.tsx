@@ -255,8 +255,10 @@ export default async function WhatsappSuportePage({
                         {formatDateTime(m.createdAt)}
                       </p>
                     </div>
-                    {m.direction === "OUT" && m.sender && (
-                      <span className="text-[10px] text-ink-muted mt-0.5 mr-1">{m.sender.name}</span>
+                    {m.direction === "OUT" && (
+                      <span className="text-[10px] text-ink-muted mt-0.5 mr-1">
+                        {m.sender ? m.sender.name : "Respondido pelo celular"}
+                      </span>
                     )}
                   </div>
                 ))}
