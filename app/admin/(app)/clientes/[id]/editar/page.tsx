@@ -1,9 +1,11 @@
 import { notFound } from "next/navigation";
 import { prisma } from "@/lib/prisma";
 import { CustomerForm } from "@/components/customers/CustomerForm";
+import { requireFeature } from "@/lib/session";
 import { updateCustomer } from "../../actions";
 
 export default async function EditarClientePage({ params }: { params: Promise<{ id: string }> }) {
+  await requireFeature("clientes");
   const { id } = await params;
 
   const [customer, partners] = await Promise.all([

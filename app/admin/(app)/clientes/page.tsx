@@ -7,12 +7,14 @@ import { FASE_OBRA_LABELS, type FaseObra } from "@/lib/constants";
 import { Card } from "@/components/ui/Card";
 import { Badge } from "@/components/ui/Badge";
 import { LinkButton } from "@/components/ui/Button";
+import { requireFeature } from "@/lib/session";
 
 export default async function ClientesPage({
   searchParams,
 }: {
   searchParams: Promise<{ q?: string; bairro?: string; recencia?: string; fase?: string }>;
 }) {
+  await requireFeature("clientes");
   const params = await searchParams;
   const q = params.q?.trim() ?? "";
   const bairroFilter = params.bairro ?? "";

@@ -7,8 +7,10 @@ import { recencyBucket, daysUntilBirthday, RECENCY_LABELS, RECENCY_STATUS } from
 import { PROFISSAO_LABELS, FASE_OBRA_LABELS } from "@/lib/constants";
 import { Card } from "@/components/ui/Card";
 import { Badge } from "@/components/ui/Badge";
+import { requireFeature } from "@/lib/session";
 
 export default async function ClienteDetailPage({ params }: { params: Promise<{ id: string }> }) {
+  await requireFeature("clientes");
   const { id } = await params;
 
   const customer = await prisma.customer.findUnique({

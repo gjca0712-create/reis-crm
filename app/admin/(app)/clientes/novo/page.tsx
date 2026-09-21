@@ -1,8 +1,10 @@
 import { prisma } from "@/lib/prisma";
 import { CustomerForm } from "@/components/customers/CustomerForm";
+import { requireFeature } from "@/lib/session";
 import { createCustomer } from "../actions";
 
 export default async function NovoClientePage() {
+  await requireFeature("clientes");
   const partners = await prisma.partner.findMany({
     orderBy: { name: "asc" },
     select: { id: true, name: true, profissao: true },
