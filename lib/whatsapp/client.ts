@@ -12,7 +12,12 @@ import makeWASocket, {
 import type { Boom } from "@hapi/boom";
 import pino from "pino";
 import { onlyDigits } from "@/lib/format";
-import { processInboundWhatsAppMessage, processOutboundFromPhone, normalizeIncomingPhone } from "./inbound";
+import {
+  processInboundWhatsAppMessage,
+  processOutboundFromPhone,
+  normalizeIncomingPhone,
+  findPhoneByWhatsAppLid,
+} from "./inbound";
 import { WHATSAPP_LINE_IDS, type WhatsAppLineId } from "./lines";
 import { saveMediaBuffer, mediaCategoryFromMimetype, type MediaCategory } from "./media";
 
@@ -335,10 +340,28 @@ export async function sendWhatsAppMedia(line: WhatsAppLineId, phone: string, med
 // passou a usar pra alguns contatos) em vez do número de telefone real — nesse
 // caso o telefone de verdade vem em key.senderPn. Sem isso, o número salvo é
 // lixo (o próprio LID) e a resposta nunca chega a lugar nenhum.
+//
+// Só serve pra mensagem de VERDADE do cliente (sender = cliente). Numa
+// resposta mandada pelo celular pareado (fromMe), sender somos NÓS — usar essa
+// função ali pegaria nosso próprio número (ou nada), nunca o do cliente. Ver
+// resolvePhoneForOutboundReply, que trata esse outro caso.
 function extractPhoneFromJid(key: { remoteJid?: string | null; senderPn?: string | null } | null | undefined): string | null {
   const jid = key?.senderPn || key?.remoteJid;
   if (!jid || jid.endsWith("@g.us") || jid.endsWith("@lid")) return null;
   return normalizeIncomingPhone(jid.split("@")[0].split(":")[0]);
+}
+
+// Telefone do CLIENTE numa resposta mandada direto do celular pareado
+// (fromMe). Aqui o que importa é remoteJid (a conversa em si), nunca
+// senderPn/senderLid (que descrevem quem mandou a mensagem — no caso, nós
+// mesmos). Quando remoteJid é um @lid, só dá pra resolver o telefone de
+// verdade se esse par lid<->cliente já foi visto antes numa mensagem recebida
+// (ver processInboundWhatsAppMessage) — por isso praticamente toda resposta
+// só funciona depois que o cliente já mandou pelo menos uma mensagem antes.
+async function resolvePhoneForOutboundReply(remoteJid: string | null | undefined): Promise<string | null> {
+  if (!remoteJid || remoteJid.endsWith("@g.us")) return null;
+  if (remoteJid.endsWith("@lid")) return findPhoneByWhatsAppLid(remoteJid);
+  return normalizeIncomingPhone(remoteJid.split("@")[0].split(":")[0]);
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -401,7 +424,7 @@ async function handleReplyFromPhone(line: WhatsAppLineId, msg: any, sock: WASock
   if (id && sentMessages.has(id)) return;
   if (alreadyProcessedPhoneReply(id)) return;
 
-  const phone = extractPhoneFromJid(msg.key);
+  const phone = await resolvePhoneForOutboundReply(msg.key?.remoteJid);
   if (!phone) return;
 
   const text = extractText(msg);
@@ -438,9 +461,14 @@ async function handleIncomingMessage(line: WhatsAppLineId, msg: any, sock: WASoc
   // pushName: nome que a própria pessoa colocou no perfil do WhatsApp dela —
   // é isso que o WhatsApp Web mostra pra contato ainda não salvo na agenda.
   const pushName: string | null = msg.pushName || null;
+  // Guarda o par lid<->telefone (quando essa conversa usa @lid) pra permitir
+  // reconhecer depois uma resposta mandada direto do celular pareado — ver
+  // resolvePhoneForOutboundReply.
+  const remoteJid: string | undefined = msg.key?.remoteJid;
+  const lid = remoteJid?.endsWith("@lid") ? remoteJid : null;
 
   if (!media) {
-    await processInboundWhatsAppMessage(line, phone, text, undefined, pushName);
+    await processInboundWhatsAppMessage(line, phone, text, undefined, pushName, lid);
     return;
   }
 
@@ -455,6 +483,7 @@ async function handleIncomingMessage(line: WhatsAppLineId, msg: any, sock: WASoc
       mimeType: media.mimetype,
       fileName: media.fileName,
     },
-    pushName
+    pushName,
+    lid
   );
 }

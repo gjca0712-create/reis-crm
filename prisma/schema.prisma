@@ -78,6 +78,14 @@ model Customer {
   // material ele tende a precisar comprar em seguida.
   faseObra      String?
 
+  // Identificador alternativo (@lid) que o WhatsApp usa pra esse contato em vez
+  // do número de telefone, em parte da migração deles pra endereçamento por
+  // privacidade — ver comentário em lib/whatsapp/client.ts. Guardado assim que
+  // uma mensagem RECEBIDA revela o par lid<->telefone, pra permitir reconhecer
+  // uma resposta mandada depois direto do celular pareado (nesse caso o
+  // WhatsApp só entrega o @lid do cliente, não o telefone).
+  whatsappLid String?
+
   referredById String?
   referredBy   Partner? @relation(fields: [referredById], references: [id])
 

@@ -49,15 +49,23 @@ async function withPhoneLock<T>(phone: string, fn: () => Promise<T>): Promise<T>
   return result;
 }
 
+// Telefone de um cliente a partir do @lid que o WhatsApp usa pra essa conversa
+// (ver comentário grande em lib/whatsapp/client.ts sobre por que isso existe).
+export async function findPhoneByWhatsAppLid(lid: string): Promise<string | null> {
+  const customer = await prisma.customer.findFirst({ where: { whatsappLid: lid }, select: { phone: true } });
+  return customer?.phone ?? null;
+}
+
 export async function processInboundWhatsAppMessage(
   line: WhatsAppLineId,
   phone: string,
   text: string,
   media?: InboundMedia,
-  pushName?: string | null
+  pushName?: string | null,
+  lid?: string | null
 ): Promise<void> {
   if (!phone || (!text && !media)) return;
-  await withPhoneLock(phone, () => processInboundWhatsAppMessageLocked(line, phone, text, media, pushName));
+  await withPhoneLock(phone, () => processInboundWhatsAppMessageLocked(line, phone, text, media, pushName, lid));
 }
 
 async function processInboundWhatsAppMessageLocked(
@@ -65,7 +73,8 @@ async function processInboundWhatsAppMessageLocked(
   phone: string,
   text: string,
   media?: InboundMedia,
-  pushName?: string | null
+  pushName?: string | null,
+  lid?: string | null
 ): Promise<void> {
   let customer = await prisma.customer.findFirst({ where: { phone } });
   if (!customer) {
@@ -79,8 +88,15 @@ async function processInboundWhatsAppMessageLocked(
         phone,
         bairro: "Não informado",
         notes: "Cadastrado automaticamente a partir de uma mensagem recebida no WhatsApp.",
+        whatsappLid: lid || undefined,
       },
     });
+  } else if (lid && customer.whatsappLid !== lid) {
+    // Guarda (ou atualiza) o @lid assim que uma mensagem recebida revela o
+    // par lid<->cliente — é o único jeito de reconhecer depois uma resposta
+    // mandada direto do celular pareado pra esse cliente, já que nesse caso o
+    // WhatsApp só entrega o @lid, nunca o telefone de verdade.
+    customer = await prisma.customer.update({ where: { id: customer.id }, data: { whatsappLid: lid } });
   }
 
   // Conversa mais recente do cliente NESSA linha — cada número tem seu próprio
