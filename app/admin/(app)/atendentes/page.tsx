@@ -1,3 +1,4 @@
+import Link from "next/link";
 import { prisma } from "@/lib/prisma";
 import { requireCeo } from "@/lib/session";
 import { formatDate } from "@/lib/format";
@@ -35,6 +36,7 @@ export default async function AtendentesPage() {
                 <th className="font-medium py-3 px-4">Perfil</th>
                 <th className="font-medium py-3 px-4">Avaliação média</th>
                 <th className="font-medium py-3 px-4">Desde</th>
+                <th className="font-medium py-3 px-4">Permissões</th>
               </tr>
             </thead>
             <tbody>
@@ -49,6 +51,15 @@ export default async function AtendentesPage() {
                       {stats && stats._avg.score ? `${stats._avg.score.toFixed(1)} ★ (${stats._count._all})` : "—"}
                     </td>
                     <td className="py-3 px-4 text-ink-muted tabular-nums">{formatDate(u.createdAt)}</td>
+                    <td className="py-3 px-4">
+                      {u.role === "CEO" ? (
+                        <span className="text-ink-muted">—</span>
+                      ) : (
+                        <Link href={`/admin/atendentes/${u.id}`} className="text-gold-400 hover:underline">
+                          {u.featureOverrides ? "Personalizado" : "Padrão do perfil"}
+                        </Link>
+                      )}
+                    </td>
                   </tr>
                 );
               })}

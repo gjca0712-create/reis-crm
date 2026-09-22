@@ -1,5 +1,5 @@
 import { NextResponse, type NextRequest } from "next/server";
-import { getSession } from "@/lib/session";
+import { getSession, getSessionFeatures } from "@/lib/session";
 import { canAccess } from "@/lib/permissions";
 import { readMediaFile, MIME_BY_EXT } from "@/lib/whatsapp/media";
 
@@ -9,7 +9,8 @@ import { readMediaFile, MIME_BY_EXT } from "@/lib/whatsapp/media";
 // abrir foto/áudio de cliente se descobrisse a URL de um anexo.
 export async function GET(request: NextRequest, { params }: { params: Promise<{ filename: string }> }) {
   const session = await getSession();
-  if (!session || !canAccess(session.role, "whatsapp_suporte")) {
+  const features = session ? await getSessionFeatures(session) : [];
+  if (!session || !canAccess(features, "whatsapp_suporte")) {
     return new NextResponse("Não autorizado", { status: 401 });
   }
 

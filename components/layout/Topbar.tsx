@@ -3,12 +3,13 @@ import { logout } from "@/app/admin/login/actions";
 import { ROLE_LABELS } from "@/lib/constants";
 import { initials } from "@/lib/format";
 import type { SessionPayload } from "@/lib/auth";
+import type { Feature } from "@/lib/permissions";
 import { MobileNav } from "./MobileNav";
 
-export function Topbar({ session }: { session: SessionPayload }) {
+export function Topbar({ session, features }: { session: SessionPayload; features: Feature[] }) {
   return (
     <header className="h-16 border-b border-border bg-surface/60 backdrop-blur flex items-center justify-between px-4 lg:px-6 sticky top-0 z-10">
-      <MobileNav role={session.role} />
+      <MobileNav features={features} />
       <div className="flex items-center gap-4 ml-auto">
         <div className="text-right leading-tight hidden sm:block">
           <div className="text-sm font-medium text-ink-primary">{session.name}</div>

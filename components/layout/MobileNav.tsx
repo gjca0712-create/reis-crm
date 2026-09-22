@@ -7,13 +7,12 @@ import { usePathname } from "next/navigation";
 import { Menu, X } from "lucide-react";
 import { cn } from "@/lib/cn";
 import { NAV_ITEMS } from "./nav-items";
-import type { Role } from "@/lib/constants";
-import { canAccess } from "@/lib/permissions";
+import { canAccess, type Feature } from "@/lib/permissions";
 
-export function MobileNav({ role }: { role: Role }) {
+export function MobileNav({ features }: { features: Feature[] }) {
   const [open, setOpen] = useState(false);
   const pathname = usePathname();
-  const items = NAV_ITEMS.filter((item) => canAccess(role, item.feature));
+  const items = NAV_ITEMS.filter((item) => canAccess(features, item.feature));
 
   return (
     <div className="lg:hidden">

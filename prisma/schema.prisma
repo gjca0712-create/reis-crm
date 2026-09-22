@@ -17,6 +17,9 @@ model User {
   email        String   @unique
   passwordHash String
   role         String
+  // null = usa a lista padrão do perfil (role); array = lista definitiva e
+  // personalizada de features que esse usuário específico pode acessar.
+  featureOverrides Json?
   createdAt    DateTime @default(now())
 
   sentMessages          Message[]

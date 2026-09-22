@@ -6,10 +6,10 @@ import { prisma } from "@/lib/prisma";
 import { verifyPassword } from "@/lib/password";
 import { createSessionToken, SESSION_COOKIE_NAME } from "@/lib/auth";
 import type { Role } from "@/lib/constants";
-import { canAccess, defaultRouteFor, type Feature } from "@/lib/permissions";
+import { canAccess, defaultRouteFor, resolveFeatures, type Feature } from "@/lib/permissions";
 import { isLoginLocked, registerFailedLogin, clearLoginAttempts } from "@/lib/rateLimit";
 
-// Mapeia rota -> feature pra saber se o papel logado pode mesmo acessar o
+// Mapeia rota -> feature pra saber se o usuário logado pode mesmo acessar o
 // "next" pedido (ex: veio de um link direto ou de um redirect do middleware).
 const ROUTE_FEATURES: [string, Feature][] = [
   ["/admin/dashboard", "dashboard"],
@@ -22,12 +22,12 @@ const ROUTE_FEATURES: [string, Feature][] = [
   ["/admin/avaliacoes", "avaliacoes"],
 ];
 
-function resolveNext(requested: string, role: Role): string {
+function resolveNext(requested: string, features: Feature[]): string {
   const match = ROUTE_FEATURES.find(([prefix]) => requested === prefix || requested.startsWith(`${prefix}/`));
-  if (match && !canAccess(role, match[1])) {
-    return defaultRouteFor(role);
+  if (match && !canAccess(features, match[1])) {
+    return defaultRouteFor(features);
   }
-  return requested || defaultRouteFor(role);
+  return requested || defaultRouteFor(features);
 }
 
 export async function login(formData: FormData) {
@@ -55,6 +55,7 @@ export async function login(formData: FormData) {
   if (email) clearLoginAttempts(email);
 
   const role = user.role as Role;
+  const features = resolveFeatures(role, user.featureOverrides);
 
   const token = await createSessionToken({
     userId: user.id,
@@ -72,7 +73,7 @@ export async function login(formData: FormData) {
     maxAge: 60 * 60 * 24 * 30,
   });
 
-  redirect(resolveNext(next, role));
+  redirect(resolveNext(next, features));
 }
 
 export async function logout() {

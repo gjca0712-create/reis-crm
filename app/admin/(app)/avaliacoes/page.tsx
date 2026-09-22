@@ -1,12 +1,12 @@
 import { Star } from "lucide-react";
-import { requireCeo } from "@/lib/session";
+import { requireFeature } from "@/lib/session";
 import { prisma } from "@/lib/prisma";
 import { formatDate } from "@/lib/format";
 import { Card } from "@/components/ui/Card";
 import { StatTile } from "@/components/ui/StatTile";
 
 export default async function AvaliacoesPage() {
-  await requireCeo();
+  await requireFeature("avaliacoes");
 
   const [allRatings, agentStats] = await Promise.all([
     prisma.rating.findMany({

@@ -5,12 +5,11 @@ import Image from "next/image";
 import { usePathname } from "next/navigation";
 import { cn } from "@/lib/cn";
 import { NAV_ITEMS } from "./nav-items";
-import type { Role } from "@/lib/constants";
-import { canAccess } from "@/lib/permissions";
+import { canAccess, type Feature } from "@/lib/permissions";
 
-export function Sidebar({ role }: { role: Role }) {
+export function Sidebar({ features }: { features: Feature[] }) {
   const pathname = usePathname();
-  const items = NAV_ITEMS.filter((item) => canAccess(role, item.feature));
+  const items = NAV_ITEMS.filter((item) => canAccess(features, item.feature));
 
   return (
     <aside className="hidden lg:flex w-64 shrink-0 flex-col border-r border-border bg-surface">
