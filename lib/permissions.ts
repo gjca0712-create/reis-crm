@@ -14,7 +14,8 @@ export type Feature =
   | "atendentes"
   | "avaliacoes"
   | "ocorrencias"
-  | "leads";
+  | "leads"
+  | "auditoria";
 
 export const FEATURE_LABELS: Record<Feature, string> = {
   dashboard: "Dashboard (faturamento)",
@@ -28,13 +29,16 @@ export const FEATURE_LABELS: Record<Feature, string> = {
   avaliacoes: "Avaliações",
   ocorrencias: "Ocorrências",
   leads: "Leads (site)",
+  auditoria: "Auditoria (histórico de ações)",
 };
 
-// "atendentes" (criar usuário, editar permissões de outros) nunca entra na
-// grade de personalização — se pudesse ser concedida, um usuário promovido
-// viraria um "CEO disfarçado", capaz de criar contas e se auto-promover.
-// Essa tela continua travada em requireCeo() (checagem de role, não de feature).
-export const CEO_ONLY_FEATURES: Feature[] = ["atendentes"];
+// "atendentes" (criar usuário, editar permissões de outros) e "auditoria"
+// (histórico de quem mexeu em quê, inclusive tentativas de login) nunca entram
+// na grade de personalização — se pudessem ser concedidas, um usuário
+// promovido viraria um "CEO disfarçado", capaz de criar contas, se
+// auto-promover e apagar o próprio rastro. Essas telas continuam travadas em
+// requireCeo() (checagem de role, não de feature).
+export const CEO_ONLY_FEATURES: Feature[] = ["atendentes", "auditoria"];
 
 export const CUSTOMIZABLE_FEATURES: Feature[] = (Object.keys(FEATURE_LABELS) as Feature[]).filter(
   (f) => !CEO_ONLY_FEATURES.includes(f)
@@ -56,6 +60,7 @@ const ROLE_FEATURES: Record<Role, Feature[]> = {
     "avaliacoes",
     "ocorrencias",
     "leads",
+    "auditoria",
   ],
   GERENTE: [
     "clientes",

@@ -10,6 +10,7 @@ import {
   Star,
   AlertTriangle,
   UserPlus,
+  History,
   type LucideIcon,
 } from "lucide-react";
 import type { Feature } from "@/lib/permissions";
@@ -28,4 +29,5 @@ export const NAV_ITEMS: NavItem[] = [
   { href: "/admin/whatsapp/campanhas", label: "WhatsApp Campanhas", icon: Send, feature: "whatsapp_campanhas" },
   { href: "/admin/atendentes", label: "Atendentes", icon: Headphones, feature: "atendentes" },
   { href: "/admin/avaliacoes", label: "Avaliações", icon: Star, feature: "avaliacoes" },
+  { href: "/admin/auditoria", label: "Auditoria", icon: History, feature: "auditoria" },
 ];

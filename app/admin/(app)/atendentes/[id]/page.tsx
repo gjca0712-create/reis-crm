@@ -6,9 +6,12 @@ import { requireCeo } from "@/lib/session";
 import { ROLE_LABELS, type Role } from "@/lib/constants";
 import { CUSTOMIZABLE_FEATURES, FEATURE_LABELS, defaultFeaturesFor, resolveFeatures } from "@/lib/permissions";
 import { Card } from "@/components/ui/Card";
-import { updatePermissions, resetPermissions } from "../actions";
+import { updatePermissions, resetPermissions, updateUserInfo, resetUserPassword } from "../actions";
 
-export default async function EditarPermissoesPage({ params }: { params: Promise<{ id: string }> }) {
+const inputClass =
+  "w-full rounded-lg bg-page border border-border px-3 py-2.5 text-sm text-ink-primary placeholder:text-ink-muted focus:outline-none focus:ring-2 focus:ring-gold-400/50";
+
+export default async function EditarUsuarioPage({ params }: { params: Promise<{ id: string }> }) {
   const ceo = await requireCeo();
   const { id } = await params;
 
@@ -36,6 +39,77 @@ export default async function EditarPermissoesPage({ params }: { params: Promise
           {user.email} · {ROLE_LABELS[user.role] ?? user.role}
         </p>
       </div>
+
+      <Card title="Dados do usuário" className="p-5">
+        <form action={updateUserInfo} className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+          <input type="hidden" name="userId" value={user.id} />
+          <label className="block">
+            <span className="block text-sm text-ink-secondary mb-1.5">Nome completo</span>
+            <input name="name" required defaultValue={user.name} className={inputClass} />
+          </label>
+          <label className="block">
+            <span className="block text-sm text-ink-secondary mb-1.5">E-mail</span>
+            <input name="email" type="email" required defaultValue={user.email} className={inputClass} />
+          </label>
+          <label className="block">
+            <span className="block text-sm text-ink-secondary mb-1.5">Perfil</span>
+            {isSelf ? (
+              <>
+                <input
+                  type="text"
+                  disabled
+                  value={ROLE_LABELS[user.role] ?? user.role}
+                  className={`${inputClass} opacity-60 cursor-not-allowed`}
+                />
+                <input type="hidden" name="role" value={user.role} />
+                <span className="block text-[11px] text-ink-muted mt-1">
+                  Você não pode alterar seu próprio perfil (evita se trancar fora do CEO).
+                </span>
+              </>
+            ) : (
+              <select name="role" defaultValue={user.role} className={inputClass}>
+                <option value="ATENDENTE">Atendente</option>
+                <option value="VENDEDOR">Vendedor</option>
+                <option value="GERENTE">Gerente</option>
+                <option value="CEO">CEO</option>
+              </select>
+            )}
+          </label>
+          <div className="sm:col-span-2 flex justify-end">
+            <button
+              type="submit"
+              className="rounded-lg bg-gold-400 text-page font-semibold px-5 py-2.5 text-sm hover:bg-gold-300 transition-colors"
+            >
+              Salvar dados
+            </button>
+          </div>
+        </form>
+      </Card>
+
+      <Card title="Redefinir senha" className="p-5">
+        <form action={resetUserPassword} className="grid grid-cols-1 sm:grid-cols-2 gap-4 items-end">
+          <input type="hidden" name="userId" value={user.id} />
+          <label className="block">
+            <span className="block text-sm text-ink-secondary mb-1.5">Nova senha</span>
+            <input
+              name="password"
+              type="password"
+              required
+              minLength={6}
+              placeholder="Mínimo 6 caracteres"
+              className={inputClass}
+            />
+          </label>
+          <div className="flex justify-end">
+            <button
+              type="submit"
+              className="rounded-lg border border-border-strong text-ink-secondary px-4 py-2.5 text-sm hover:text-ink-primary hover:border-ink-primary/40 transition-colors"
+            >
+              Redefinir senha
+            </button>
+          </div>
+        </form>
+      </Card>
 
       {isCeo ? (
         <Card className="p-5">

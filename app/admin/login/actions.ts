@@ -8,6 +8,7 @@ import { createSessionToken, SESSION_COOKIE_NAME } from "@/lib/auth";
 import type { Role } from "@/lib/constants";
 import { canAccess, defaultRouteFor, resolveFeatures, type Feature } from "@/lib/permissions";
 import { isLoginLocked, registerFailedLogin, clearLoginAttempts } from "@/lib/rateLimit";
+import { logAudit } from "@/lib/audit";
 
 // Mapeia rota -> feature pra saber se o usuário logado pode mesmo acessar o
 // "next" pedido (ex: veio de um link direto ou de um redirect do middleware).
@@ -20,6 +21,7 @@ const ROUTE_FEATURES: [string, Feature][] = [
   ["/admin/whatsapp/campanhas", "whatsapp_campanhas"],
   ["/admin/atendentes", "atendentes"],
   ["/admin/avaliacoes", "avaliacoes"],
+  ["/admin/auditoria", "auditoria"],
 ];
 
 function resolveNext(requested: string, features: Feature[]): string {
@@ -48,7 +50,10 @@ export async function login(formData: FormData) {
   const valid = user ? await verifyPassword(password, user.passwordHash) : false;
 
   if (!user || !valid) {
-    if (email) registerFailedLogin(email);
+    if (email) {
+      registerFailedLogin(email);
+      await logAudit({ actor: null, action: "login.failure", targetLabel: email });
+    }
     redirect(`/admin/login?error=1&next=${encodeURIComponent(next)}`);
   }
 
@@ -56,6 +61,13 @@ export async function login(formData: FormData) {
 
   const role = user.role as Role;
   const features = resolveFeatures(role, user.featureOverrides);
+
+  await logAudit({
+    actor: { userId: user.id, name: user.name, email: user.email },
+    action: "login.success",
+    targetId: user.id,
+    targetLabel: user.email,
+  });
 
   const token = await createSessionToken({
     userId: user.id,

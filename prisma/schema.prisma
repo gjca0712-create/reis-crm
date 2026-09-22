@@ -28,6 +28,23 @@ model User {
   occurrencesReported   Occurrence[]
 }
 
+// Sem relation pro User de propósito — guarda ator/alvo como texto solto, não
+// FK. Assim o registro sobrevive mesmo que o usuário envolvido seja removido
+// no futuro (não existe exclusão de usuário hoje, mas não deve depender disso).
+model AuditLog {
+  id          String   @id @default(cuid())
+  createdAt   DateTime @default(now())
+  actorId     String?
+  actorName   String
+  actorEmail  String?
+  action      String
+  targetId    String?
+  targetLabel String?
+  details     Json?
+
+  @@index([createdAt])
+}
+
 // Parceiro indicador: pedreiro, eletricista, etc. Recebe o cashback das compras que indicou.
 model Partner {
   id              String   @id @default(cuid())
