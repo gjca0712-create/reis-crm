@@ -16,6 +16,14 @@ const nextConfig: NextConfig = {
     serverActions: {
       bodySizeLimit: "15mb",
     },
+    // Sem isso, o cache de navegação do navegador (client router cache) pode
+    // reaproveitar uma versão antiga de uma página dinâmica ao navegar de
+    // volta pra ela (ex: trocar de usuário logado, ou reabrir uma conversa
+    // pela barra lateral) — mostrando dado desatualizado (nome de quem
+    // respondeu, status da conversa) até dar F5 manualmente.
+    staleTimes: {
+      dynamic: 0,
+    },
   },
 
   images: {
