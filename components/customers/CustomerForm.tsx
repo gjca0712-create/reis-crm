@@ -72,7 +72,7 @@ export function CustomerForm({
               defaultValue={dv.bairro}
               list="bairros-sugeridos"
               className={inputClass}
-              placeholder="Ex: Setor Bueno"
+              placeholder="Ex: Centro"
             />
             <datalist id="bairros-sugeridos">
               {BAIRROS_PADRAO.map((b) => (

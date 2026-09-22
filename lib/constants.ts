@@ -66,15 +66,23 @@ export const LEAD_STATUS_LABELS: Record<string, string> = {
   PERDIDO: "Perdido",
 };
 
+// Bairros reais de Cruz das Almas-BA (fonte: memorialdecruzdasalmas.com.br) —
+// lista antiga tinha bairros de Goiânia por engano. É só sugestão de
+// autocomplete (datalist), não trava cadastro de bairro fora dessa lista.
 export const BAIRROS_PADRAO = [
-  "Setor Bueno",
-  "Setor Marista",
-  "Jardim América",
-  "Vila Nova",
-  "Campinas",
-  "Setor Sul",
-  "Jardim Goiás",
-  "Parque Amazônia",
-  "Setor Coimbra",
-  "Residencial Eldorado",
+  "Centro",
+  "Bela Vista",
+  "Santo Antônio",
+  "São Judas Tadeu",
+  "Sapucaia",
+  "UFRB",
+  "Primavera",
+  "Alberto Passos",
+  "Areal",
+  "Assembleia",
+  "Bomsucesso",
+  "Fonte do Doutor",
+  "Itapicuru",
+  "Jardim Planalto",
+  "Vila Alzira",
 ];

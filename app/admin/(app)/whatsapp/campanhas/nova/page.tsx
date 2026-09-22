@@ -1,15 +1,7 @@
 import { Card } from "@/components/ui/Card";
 import { requireFeature } from "@/lib/session";
+import { SEGMENTS } from "@/lib/campaigns";
 import { createCampaign } from "../actions";
-
-const SEGMENTS = [
-  { value: "todos", label: "Todos os clientes" },
-  { value: "recencia-30", label: "Compraram nos últimos 30 dias" },
-  { value: "recencia-60", label: "Compraram nos últimos 60 dias" },
-  { value: "recencia-90", label: "Compraram nos últimos 90 dias" },
-  { value: "inativos", label: "Inativos (90+ dias sem comprar)" },
-  { value: "sem-compra", label: "Nunca compraram (leads)" },
-];
 
 const inputClass =
   "w-full rounded-lg bg-page border border-border px-3 py-2.5 text-sm text-ink-primary placeholder:text-ink-muted focus:outline-none focus:ring-2 focus:ring-gold-400/50";
@@ -21,7 +13,7 @@ export default async function NovaCampanhaPage() {
     <div className="max-w-2xl space-y-6">
       <div>
         <h1 className="text-xl font-semibold text-ink-primary">Nova campanha</h1>
-        <p className="text-sm text-ink-muted mt-0.5">Disparo em massa via API oficial do WhatsApp</p>
+        <p className="text-sm text-ink-muted mt-0.5">Disparo em massa pela Linha 1 do WhatsApp</p>
       </div>
 
       <form action={createCampaign} className="space-y-5">
@@ -58,7 +50,8 @@ export default async function NovaCampanhaPage() {
               className={inputClass}
             />
             <p className="text-xs text-ink-muted mt-1.5">
-              No envio real, mensagens de disparo precisam seguir um template pré-aprovado pela Meta.
+              Enviada como texto simples, uma mensagem por cliente do segmento escolhido. Evite mensagens que pareçam
+              spam (excesso de links, tudo em maiúsculo) — isso aumenta o risco de bloqueio do número.
             </p>
           </label>
         </Card>

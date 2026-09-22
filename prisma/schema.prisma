@@ -200,6 +200,10 @@ model Campaign {
   segment      String
   status       String    @default("RASCUNHO")
   audienceSize Int       @default(0)
+  // Quantas mensagens já foram efetivamente entregues, atualizado durante o
+  // disparo (status "ENVIANDO") — permite mostrar progresso em campanhas
+  // grandes, já que o envio é sequencial e espaçado (ver actions.ts).
+  sentCount    Int       @default(0)
   scheduledAt  DateTime?
   sentAt       DateTime?
   createdAt    DateTime  @default(now())

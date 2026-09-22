@@ -3,37 +3,12 @@
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { prisma } from "@/lib/prisma";
-import { recencyBucket } from "@/lib/calculations";
 import { requireFeature } from "@/lib/session";
-
-const SEGMENT_LABELS: Record<string, string> = {
-  todos: "Todos os clientes",
-  "recencia-30": "Compraram nos últimos 30 dias",
-  "recencia-60": "Compraram nos últimos 60 dias",
-  "recencia-90": "Compraram nos últimos 90 dias",
-  inativos: "Inativos (90+ dias sem comprar)",
-  "sem-compra": "Nunca compraram (leads)",
-};
-
-async function calcAudienceSize(segmentType: string): Promise<number> {
-  if (segmentType === "todos") {
-    return prisma.customer.count();
-  }
-
-  const customers = await prisma.customer.findMany({
-    select: { sales: { select: { date: true }, orderBy: { date: "desc" }, take: 1 } },
-  });
-
-  return customers.filter((c) => {
-    const bucket = recencyBucket(c.sales[0]?.date ?? null);
-    if (segmentType === "recencia-30") return bucket === "30";
-    if (segmentType === "recencia-60") return bucket === "60";
-    if (segmentType === "recencia-90") return bucket === "90";
-    if (segmentType === "inativos") return bucket === "inativo";
-    if (segmentType === "sem-compra") return bucket === "sem-compra";
-    return false;
-  }).length;
-}
+import { getSegmentCustomers, type CampaignCustomer } from "@/lib/campaigns";
+import { DEFAULT_WHATSAPP_LINE } from "@/lib/whatsapp/lines";
+import { getWhatsAppState, sendWhatsAppMessage, isSendablePhone } from "@/lib/whatsapp/client";
+import { logAudit } from "@/lib/audit";
+import type { SessionPayload } from "@/lib/auth";
 
 export async function createCampaign(formData: FormData) {
   await requireFeature("whatsapp_campanhas");
@@ -46,31 +21,88 @@ export async function createCampaign(formData: FormData) {
     throw new Error("Nome e mensagem são obrigatórios.");
   }
 
-  const audienceSize = await calcAudienceSize(segmentType);
+  const audienceSize = (await getSegmentCustomers(segmentType)).length;
 
   await prisma.campaign.create({
-    data: {
-      name,
-      message,
-      segment: SEGMENT_LABELS[segmentType] ?? segmentType,
-      audienceSize,
-      status: "RASCUNHO",
-    },
+    data: { name, message, segment: segmentType, audienceSize, status: "RASCUNHO" },
   });
 
   revalidatePath("/admin/whatsapp/campanhas");
   redirect("/admin/whatsapp/campanhas");
 }
 
-// Simula o disparo via API oficial do WhatsApp. A integração real (Meta Cloud API)
-// exige número comercial verificado, token de acesso e template de mensagem aprovado.
-export async function sendCampaign(campaignId: string) {
-  await requireFeature("whatsapp_campanhas");
+function sleep(ms: number) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+// Espera um tempo aleatório entre cada mensagem em vez de mandar tudo em
+// rajada — a conexão usada aqui é a mesma do WhatsApp Suporte (Baileys, não é
+// a API comercial oficial da Meta), e disparo muito rápido pra muitos números
+// é o padrão mais comum de bloqueio automático de número pelo WhatsApp.
+function randomDelayMs() {
+  return 4000 + Math.random() * 5000;
+}
+
+// Roda em segundo plano (não é aguardado por quem chamou) — o processo do
+// Railway continua de pé mesmo depois da resposta da server action voltar pro
+// navegador, então o disparo segue mesmo se o CEO sair da tela.
+async function runCampaignSend(
+  campaignId: string,
+  customers: CampaignCustomer[],
+  message: string,
+  actor: SessionPayload
+) {
+  let sent = 0;
+
+  for (const customer of customers) {
+    if (isSendablePhone(customer.phone)) {
+      const ok = await sendWhatsAppMessage(DEFAULT_WHATSAPP_LINE, customer.phone, message);
+      if (ok) sent++;
+    }
+
+    await prisma.campaign.update({ where: { id: campaignId }, data: { sentCount: sent } }).catch(() => {});
+    await sleep(randomDelayMs());
+  }
 
   await prisma.campaign.update({
     where: { id: campaignId },
-    data: { status: "ENVIADA", sentAt: new Date() },
+    data: { status: "ENVIADA", sentAt: new Date(), sentCount: sent },
   });
+
+  await logAudit({
+    actor,
+    action: "campaign.send",
+    targetId: campaignId,
+    details: { audienceSize: customers.length, sentCount: sent },
+  });
+}
+
+export async function sendCampaign(campaignId: string) {
+  const session = await requireFeature("whatsapp_campanhas");
+
+  const campaign = await prisma.campaign.findUnique({ where: { id: campaignId } });
+  if (!campaign) throw new Error("Campanha não encontrada.");
+  if (campaign.status === "ENVIADA" || campaign.status === "ENVIANDO") {
+    throw new Error("Essa campanha já foi disparada ou está em andamento.");
+  }
+
+  if (getWhatsAppState(DEFAULT_WHATSAPP_LINE).status !== "connected") {
+    throw new Error(
+      "O WhatsApp (Linha 1) não está conectado agora. Conecte em WhatsApp Suporte antes de disparar a campanha."
+    );
+  }
+
+  const customers = await getSegmentCustomers(campaign.segment);
+  if (customers.length === 0) {
+    throw new Error("Nenhum cliente nesse segmento pra enviar.");
+  }
+
+  await prisma.campaign.update({
+    where: { id: campaignId },
+    data: { status: "ENVIANDO", audienceSize: customers.length, sentCount: 0 },
+  });
+
+  void runCampaignSend(campaignId, customers, campaign.message, session);
 
   revalidatePath("/admin/whatsapp/campanhas");
 }
