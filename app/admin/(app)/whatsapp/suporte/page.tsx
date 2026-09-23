@@ -45,7 +45,14 @@ export default async function WhatsappSuportePage({
 
   const conversations = await prisma.conversation.findMany({
     orderBy: { lastMessageAt: "desc" },
-    include: { customer: { select: { id: true, name: true, phone: true, bairro: true } }, rating: true },
+    include: {
+      customer: { select: { id: true, name: true, phone: true, bairro: true } },
+      rating: true,
+      // Só a última mensagem, pra saber se quem falou por último foi o
+      // cliente (ainda não respondemos — negrito, igual o próprio WhatsApp)
+      // ou nós (já respondido — peso normal).
+      messages: { orderBy: { createdAt: "desc" }, take: 1, select: { direction: true } },
+    },
   });
 
   const activeId = params.c ?? conversations[0]?.id;
@@ -139,32 +146,41 @@ export default async function WhatsappSuportePage({
       <div className="grid grid-cols-1 lg:grid-cols-[320px_1fr] gap-4 h-[calc(100vh-360px)] min-h-[420px]">
         <Card className="p-0 overflow-hidden flex flex-col">
           <div className="overflow-y-auto flex-1">
-            {conversations.map((c) => (
-              <Link
-                key={c.id}
-                href={`/admin/whatsapp/suporte?c=${c.id}`}
-                className={`flex items-start gap-3 px-4 py-3 border-b border-border/60 hover:bg-surface-raised transition-colors ${
-                  c.id === activeId ? "bg-surface-raised" : ""
-                }`}
-              >
-                <div className="w-9 h-9 rounded-full bg-gold-400/15 border border-gold-700/40 flex items-center justify-center text-xs font-semibold text-gold-400 shrink-0">
-                  {c.customer.name.slice(0, 1).toUpperCase()}
-                </div>
-                <div className="min-w-0 flex-1">
-                  <div className="flex items-center justify-between gap-2">
-                    <span className="text-sm font-medium text-ink-primary truncate">{c.customer.name}</span>
-                    {c.status === "OPEN" && (
-                      <span className="w-2 h-2 rounded-full bg-status-good shrink-0" title="Em aberto" />
-                    )}
+            {conversations.map((c) => {
+              const unanswered = c.messages[0]?.direction === "IN";
+              return (
+                <Link
+                  key={c.id}
+                  href={`/admin/whatsapp/suporte?c=${c.id}`}
+                  className={`flex items-start gap-3 px-4 py-3 border-b border-border/60 hover:bg-surface-raised transition-colors ${
+                    c.id === activeId ? "bg-surface-raised" : ""
+                  }`}
+                >
+                  <div className="w-9 h-9 rounded-full bg-gold-400/15 border border-gold-700/40 flex items-center justify-center text-xs font-semibold text-gold-400 shrink-0">
+                    {c.customer.name.slice(0, 1).toUpperCase()}
                   </div>
-                  <div className="text-xs text-ink-muted truncate">
-                    {formatPhone(c.customer.phone)}
-                    <span className="text-ink-secondary"> · {whatsappLineLabel(c.line)}</span>
-                    {c.rating && <span className="text-gold-400"> · {c.rating.score}★</span>}
+                  <div className="min-w-0 flex-1">
+                    <div className="flex items-center justify-between gap-2">
+                      <span
+                        className={`text-sm text-ink-primary truncate ${unanswered ? "font-semibold" : "font-normal"}`}
+                      >
+                        {c.customer.name}
+                      </span>
+                      {c.status === "OPEN" && (
+                        <span className="w-2 h-2 rounded-full bg-status-good shrink-0" title="Em aberto" />
+                      )}
+                    </div>
+                    <div
+                      className={`text-xs truncate ${unanswered ? "text-ink-primary font-semibold" : "text-ink-muted font-normal"}`}
+                    >
+                      {formatPhone(c.customer.phone)}
+                      <span className={unanswered ? "" : "text-ink-secondary"}> · {whatsappLineLabel(c.line)}</span>
+                      {c.rating && <span className="text-gold-400"> · {c.rating.score}★</span>}
+                    </div>
                   </div>
-                </div>
-              </Link>
-            ))}
+                </Link>
+              );
+            })}
             {conversations.length === 0 && <p className="text-sm text-ink-muted p-4">Nenhuma conversa ainda.</p>}
           </div>
         </Card>
