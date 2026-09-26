@@ -20,6 +20,21 @@ import {
   releaseConversation,
 } from "./actions";
 
+// Fundo bem fraco em cada conversa da lista, só pra identificar o estado de
+// relance (o texto continua legível normal): vermelho = cliente esperando
+// resposta, amarelo = em atendimento (já respondida, ainda aberta), verde =
+// finalizada. Classes completas aqui pro Tailwind enxergar.
+const ROW_TONES = {
+  unanswered: { idle: "bg-status-critical/10 hover:bg-status-critical/15", active: "bg-status-critical/20" },
+  inProgress: { idle: "bg-status-warning/10 hover:bg-status-warning/15", active: "bg-status-warning/20" },
+  resolved: { idle: "bg-status-good/10 hover:bg-status-good/15", active: "bg-status-good/20" },
+} as const;
+
+function rowTone(status: string, unanswered: boolean) {
+  if (status === "RESOLVED") return ROW_TONES.resolved;
+  return unanswered ? ROW_TONES.unanswered : ROW_TONES.inProgress;
+}
+
 export default async function WhatsappSuportePage({
   searchParams,
 }: {
@@ -178,31 +193,39 @@ export default async function WhatsappSuportePage({
 
       <div className="grid grid-cols-1 lg:grid-cols-[320px_1fr] gap-4 h-[calc(100vh-360px)] min-h-[420px]">
         <Card className="p-0 overflow-hidden flex flex-col">
+          <div className="flex flex-wrap gap-x-4 gap-y-1 px-4 py-2 border-b border-border text-[11px] text-ink-muted">
+            <span className="inline-flex items-center gap-1.5">
+              <span className="w-2.5 h-2.5 rounded-sm bg-status-critical/40" /> Sem resposta
+            </span>
+            <span className="inline-flex items-center gap-1.5">
+              <span className="w-2.5 h-2.5 rounded-sm bg-status-warning/40" /> Em atendimento
+            </span>
+            <span className="inline-flex items-center gap-1.5">
+              <span className="w-2.5 h-2.5 rounded-sm bg-status-good/40" /> Finalizada
+            </span>
+          </div>
           <div className="overflow-y-auto flex-1">
             {conversations.map((c) => {
               const unanswered = c.messages[0]?.direction === "IN";
+              const tone = rowTone(c.status, unanswered);
+              const isActive = c.id === activeId;
               return (
                 <Link
                   key={c.id}
                   href={`/admin/whatsapp/suporte?c=${c.id}`}
-                  className={`flex items-start gap-3 px-4 py-3 border-b border-border/60 hover:bg-surface-raised transition-colors ${
-                    c.id === activeId ? "bg-surface-raised" : ""
+                  className={`flex items-start gap-3 px-4 py-3 border-b border-border/60 transition-colors ${
+                    isActive ? `${tone.active} shadow-[inset_3px_0_0_0_#D4AF37]` : tone.idle
                   }`}
                 >
                   <div className="w-9 h-9 rounded-full bg-gold-400/15 border border-gold-700/40 flex items-center justify-center text-xs font-semibold text-gold-400 shrink-0">
                     {c.customer.name.slice(0, 1).toUpperCase()}
                   </div>
                   <div className="min-w-0 flex-1">
-                    <div className="flex items-center justify-between gap-2">
-                      <span
-                        className={`text-sm text-ink-primary truncate ${unanswered ? "font-semibold" : "font-normal"}`}
-                      >
-                        {c.customer.name}
-                      </span>
-                      {c.status === "OPEN" && (
-                        <span className="w-2 h-2 rounded-full bg-status-good shrink-0" title="Em aberto" />
-                      )}
-                    </div>
+                    <span
+                      className={`block text-sm text-ink-primary truncate ${unanswered ? "font-semibold" : "font-normal"}`}
+                    >
+                      {c.customer.name}
+                    </span>
                     <div
                       className={`text-xs truncate ${unanswered ? "text-ink-primary font-semibold" : "text-ink-muted font-normal"}`}
                     >
