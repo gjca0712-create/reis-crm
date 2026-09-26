@@ -23,10 +23,19 @@ import {
 // Fundo bem fraco em cada conversa da lista, só pra identificar o estado de
 // relance (o texto continua legível normal): vermelho = cliente esperando
 // resposta, amarelo = em atendimento (já respondida, ainda aberta), verde =
-// finalizada. Classes completas aqui pro Tailwind enxergar.
+// finalizada. Classes completas aqui pro Tailwind enxergar. Vermelho rosado e
+// amarelo limão de propósito (não os status-critical/warning): sobre o fundo
+// marrom escuro, o vermelho alaranjado e o amarelo dourado viram dois tons de
+// marrom quase iguais.
 const ROW_TONES = {
-  unanswered: { idle: "bg-status-critical/10 hover:bg-status-critical/15", active: "bg-status-critical/20" },
-  inProgress: { idle: "bg-status-warning/10 hover:bg-status-warning/15", active: "bg-status-warning/20" },
+  unanswered: {
+    idle: "bg-[rgba(244,63,94,0.14)] hover:bg-[rgba(244,63,94,0.2)]",
+    active: "bg-[rgba(244,63,94,0.26)]",
+  },
+  inProgress: {
+    idle: "bg-[rgba(250,204,21,0.09)] hover:bg-[rgba(250,204,21,0.14)]",
+    active: "bg-[rgba(250,204,21,0.18)]",
+  },
   resolved: { idle: "bg-status-good/10 hover:bg-status-good/15", active: "bg-status-good/20" },
 } as const;
 
@@ -195,10 +204,10 @@ export default async function WhatsappSuportePage({
         <Card className="p-0 overflow-hidden flex flex-col">
           <div className="flex flex-wrap gap-x-4 gap-y-1 px-4 py-2 border-b border-border text-[11px] text-ink-muted">
             <span className="inline-flex items-center gap-1.5">
-              <span className="w-2.5 h-2.5 rounded-sm bg-status-critical/40" /> Sem resposta
+              <span className="w-2.5 h-2.5 rounded-sm bg-[rgba(244,63,94,0.5)]" /> Sem resposta
             </span>
             <span className="inline-flex items-center gap-1.5">
-              <span className="w-2.5 h-2.5 rounded-sm bg-status-warning/40" /> Em atendimento
+              <span className="w-2.5 h-2.5 rounded-sm bg-[rgba(250,204,21,0.45)]" /> Em atendimento
             </span>
             <span className="inline-flex items-center gap-1.5">
               <span className="w-2.5 h-2.5 rounded-sm bg-status-good/40" /> Finalizada
