@@ -6,7 +6,7 @@ import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { hashPassword } from "@/lib/password";
 import { requireCeo } from "@/lib/session";
-import { CUSTOMIZABLE_FEATURES, type Feature } from "@/lib/permissions";
+import { customizableFeaturesFor, type Feature } from "@/lib/permissions";
 import { logAudit } from "@/lib/audit";
 import type { Role } from "@/lib/constants";
 
@@ -72,7 +72,7 @@ export async function updatePermissions(formData: FormData) {
     throw new Error("Permissões de outro CEO não podem ser restringidas por aqui.");
   }
 
-  const selected = CUSTOMIZABLE_FEATURES.filter((f) => formData.get(f) === "on") as Feature[];
+  const selected = customizableFeaturesFor(user.role as Role).filter((f) => formData.get(f) === "on") as Feature[];
 
   await prisma.user.update({ where: { id: userId }, data: { featureOverrides: selected } });
 

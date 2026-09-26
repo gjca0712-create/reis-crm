@@ -240,6 +240,139 @@ model Occurrence {
   createdAt    DateTime  @default(now())
 }
 
+// ---------------------------------------------------------------------------
+// Espelho do ERP da loja (Órbita/AlphaERP, banco MySQL `orbitadb` no computador
+// da loja). SÓ LEITURA do lado do ERP: quem preenche essas tabelas é o programa
+// de sincronização que roda na loja e manda os dados pra app/api/erp/sync — ou,
+// antes da ligação existir, o gerador de demonstração (lib/erp/demo.ts), com
+// `demo = true` em cada linha. A primeira sincronização real apaga a demo.
+//
+// Separado de propósito de Sale/Customer (fidelidade, cashback): essas telas
+// (Financeiro, Produtos) leem só daqui, então nada disso mexe em ponto,
+// cashback ou histórico de cliente do CRM. Dinheiro em Decimal (não Float).
+// Cada model diz de qual tabela/coluna do Órbita o valor vem.
+// ---------------------------------------------------------------------------
+
+// produto + estoque.Saldo + último customedio.
+model ErpProduct {
+  id            String   @id @default(cuid())
+  codigo        Int      @unique // produto.Codigo (NÃO idproduto)
+  descricao     String
+  grupo         String? // grupo.Descricao
+  marca         String? // marca.Descricao
+  unidade       String   @default("UN")
+  precoVarejo   Decimal  @default(0) @db.Decimal(14, 2)
+  // Último customedio.Valor — produto.UltimoCusto é vazio na maioria dos produtos.
+  custo         Decimal? @db.Decimal(14, 4)
+  // SUM(estoque.Saldo) — produto.Estoque é campo morto (sempre 0).
+  estoque       Decimal  @default(0) @db.Decimal(14, 3)
+  estoqueMinimo Decimal? @db.Decimal(14, 3)
+  ativo         Boolean  @default(true)
+  // Data de cadastro no ERP, se houver — produto novo não conta como "parado".
+  cadastradoEm  DateTime?
+  demo          Boolean  @default(false)
+  updatedAt     DateTime @updatedAt
+}
+
+// saidanota — só venda válida (autorizada, não cancelada, não orçamento/DAV).
+model ErpSale {
+  id            String   @id @default(cuid())
+  erpId         Int      @unique // saidanota.idsaidanota
+  data          DateTime // DataEmissao, convertida do horário da loja pra UTC
+  total         Decimal  @db.Decimal(14, 2) // vNF — o que o cliente pagou
+  bruto         Decimal  @db.Decimal(14, 2) // vProd
+  desconto      Decimal  @default(0) @db.Decimal(14, 2) // vDesc
+  frete         Decimal  @default(0) @db.Decimal(14, 2) // vFrete
+  modelo        String? // "65" NFC-e, "55" NF-e
+  vendedor      String? // NomeVendedor (ou usuário do caixa)
+  clienteCodigo Int? // CodigoCliente; null = consumidor final
+  clienteNome   String?
+  // Cancelada depois de importada: continua aqui (pra sincronização saber),
+  // mas fica fora de todo total.
+  cancelada     Boolean  @default(false)
+  demo          Boolean  @default(false)
+
+  items    ErpSaleItem[]
+  payments ErpSalePayment[]
+
+  @@index([data])
+}
+
+// saidaitem.
+model ErpSaleItem {
+  id            String   @id @default(cuid())
+  saleId        String
+  sale          ErpSale  @relation(fields: [saleId], references: [id], onDelete: Cascade)
+  produtoCodigo Int // saidaitem.Codigo = produto.Codigo
+  descricao     String
+  quantidade    Decimal  @db.Decimal(14, 4)
+  valorTotal    Decimal  @db.Decimal(14, 2) // líquido de desconto (rateado incluso)
+  // Custo unitário na DATA da venda (customedio vigente), congelado — o
+  // saidaitem do Órbita não guarda custo. null = produto sem custo cadastrado
+  // (fica fora do cálculo de margem, em vez de aparecer com 100%).
+  custoUnitario Decimal? @db.Decimal(14, 4)
+
+  @@index([saleId])
+  @@index([produtoCodigo])
+}
+
+// pagamentovenda + tipodocumento.Descricao.
+model ErpSalePayment {
+  id     String  @id @default(cuid())
+  saleId String
+  sale   ErpSale @relation(fields: [saleId], references: [id], onDelete: Cascade)
+  forma  String // "PIX", "Dinheiro", "Cartão de crédito", "Crediário"...
+  valor  Decimal @db.Decimal(14, 2)
+
+  @@index([saleId])
+}
+
+// recebimento — contas a receber (crediário, boleto, cheque).
+model ErpReceivable {
+  id              String    @id @default(cuid())
+  erpId           Int       @unique // recebimento.idrecebimento
+  clienteCodigo   Int?
+  clienteNome     String
+  clienteTelefone String? // contato.Celular — pra cobrar pelo WhatsApp
+  documento       String? // tipodocumento.Descricao
+  vencimento      DateTime
+  valor           Decimal   @db.Decimal(14, 2) // ValorDocumento
+  valorPago       Decimal   @default(0) @db.Decimal(14, 2)
+  pagoEm          DateTime? // DataPagamento; null = em aberto
+  // Cancelado OU Excluido no Órbita (lá é marcação, a linha não some). Fica
+  // aqui fora de todo total — senão parcela de venda cancelada viraria "dívida".
+  cancelado       Boolean   @default(false)
+  demo            Boolean   @default(false)
+
+  @@index([vencimento])
+}
+
+// pagamento — contas a pagar.
+model ErpPayable {
+  id         String    @id @default(cuid())
+  erpId      Int       @unique // pagamento.idpagamento
+  fornecedor String
+  categoria  String? // plano de contas (pc3 -> pc2 -> pc1)
+  vencimento DateTime
+  valor      Decimal   @db.Decimal(14, 2)
+  valorPago  Decimal   @default(0) @db.Decimal(14, 2)
+  pagoEm     DateTime?
+  cancelado  Boolean   @default(false) // Cancelado OU Excluido no Órbita
+  demo       Boolean   @default(false)
+
+  @@index([vencimento])
+}
+
+// Uma linha só ("erp"): quando chegou a última sincronização real, pra tela
+// mostrar "atualizado há X min" e dar pra perceber se o programa da loja parou.
+// A linha existir = o ERP de verdade já começou a mandar dados (a partir daí a
+// demonstração não pode mais ser carregada).
+model ErpSyncState {
+  id         String    @id @default("erp")
+  lastSyncAt DateTime?
+  lastBatch  Json?
+}
+
 // Pedido de orçamento capturado no site (fora deste projeto) — vem via API
 // pública (app/api/site/leads) e some daqui quando vira Customer de verdade.
 model Lead {

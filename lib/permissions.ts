@@ -15,10 +15,14 @@ export type Feature =
   | "avaliacoes"
   | "ocorrencias"
   | "leads"
-  | "auditoria";
+  | "auditoria"
+  | "financeiro"
+  | "produtos";
 
 export const FEATURE_LABELS: Record<Feature, string> = {
   dashboard: "Dashboard (faturamento)",
+  financeiro: "Financeiro (ERP)",
+  produtos: "Produtos (ERP)",
   clientes: "Clientes",
   indicadores: "Indicadores",
   vendas: "Vendas",
@@ -44,12 +48,26 @@ export const CUSTOMIZABLE_FEATURES: Feature[] = (Object.keys(FEATURE_LABELS) as 
   (f) => !CEO_ONLY_FEATURES.includes(f)
 );
 
+// Números do ERP (faturamento, margem, contas a pagar/receber, custo) só pra
+// CEO e Gerente — nem personalizando dá pra liberar pra Vendedor/Atendente
+// (a grade de permissões nem mostra essas opções pra esses perfis).
+export const MANAGEMENT_FEATURES: Feature[] = ["financeiro", "produtos"];
+const MANAGEMENT_ROLES: Role[] = ["CEO", "GERENTE"];
+
+export function customizableFeaturesFor(role: Role): Feature[] {
+  return MANAGEMENT_ROLES.includes(role)
+    ? CUSTOMIZABLE_FEATURES
+    : CUSTOMIZABLE_FEATURES.filter((f) => !MANAGEMENT_FEATURES.includes(f));
+}
+
 // Lista padrão de cada papel — usada (a) quando o usuário nunca foi
 // personalizado (featureOverrides null) e (b) como ponto de partida sugerido
 // ao personalizar um usuário pela primeira vez.
 const ROLE_FEATURES: Record<Role, Feature[]> = {
   CEO: [
     "dashboard",
+    "financeiro",
+    "produtos",
     "clientes",
     "indicadores",
     "vendas",
@@ -63,6 +81,8 @@ const ROLE_FEATURES: Record<Role, Feature[]> = {
     "auditoria",
   ],
   GERENTE: [
+    "financeiro",
+    "produtos",
     "clientes",
     "indicadores",
     "vendas",
@@ -92,9 +112,14 @@ export function resolveFeatures(role: Role, overrides: unknown): Feature[] {
   const base = Array.isArray(overrides) ? overrides.filter(isFeature) : defaultFeaturesFor(role);
 
   if (role === "CEO") {
-    return Array.from(new Set([...base, ...CEO_ONLY_FEATURES]));
+    // Financeiro/Produtos também sempre: telas novas não apareceriam pra um
+    // CEO que já tivesse lista personalizada salva de antes delas existirem.
+    return Array.from(new Set([...base, ...CEO_ONLY_FEATURES, ...MANAGEMENT_FEATURES]));
   }
-  return base.filter((f) => !CEO_ONLY_FEATURES.includes(f));
+  const withoutCeoOnly = base.filter((f) => !CEO_ONLY_FEATURES.includes(f));
+  return MANAGEMENT_ROLES.includes(role)
+    ? withoutCeoOnly
+    : withoutCeoOnly.filter((f) => !MANAGEMENT_FEATURES.includes(f));
 }
 
 export function canAccess(features: Feature[], feature: Feature): boolean {
@@ -102,11 +127,25 @@ export function canAccess(features: Feature[], feature: Feature): boolean {
 }
 
 // Primeira tela útil pra cada usuário depois do login / quando ele bate numa
-// página que não pode ver. "atendentes" por último: é o único caminho que o
-// CEO tem garantido sempre (ver resolveFeatures), evitando um loop de redirect.
+// página que não pode ver. Cada rota aqui é guardada pela própria feature (senão
+// vira loop de redirect). "atendentes" por último: é o único caminho que o CEO
+// tem garantido sempre (ver resolveFeatures).
+const LANDING_ROUTES: [Feature, string][] = [
+  ["dashboard", "/admin/dashboard"],
+  ["clientes", "/admin/clientes"],
+  ["financeiro", "/admin/financeiro"],
+  ["produtos", "/admin/produtos"],
+  ["vendas", "/admin/vendas"],
+  ["indicadores", "/admin/indicadores"],
+  ["leads", "/admin/leads"],
+  ["ocorrencias", "/admin/ocorrencias"],
+  ["whatsapp_suporte", "/admin/whatsapp/suporte"],
+  ["whatsapp_campanhas", "/admin/whatsapp/campanhas"],
+  ["bairros", "/admin/bairros"],
+  ["avaliacoes", "/admin/avaliacoes"],
+  ["atendentes", "/admin/atendentes"],
+];
+
 export function defaultRouteFor(features: Feature[]): string {
-  if (features.includes("dashboard")) return "/admin/dashboard";
-  if (features.includes("clientes")) return "/admin/clientes";
-  if (features.includes("atendentes")) return "/admin/atendentes";
-  return "/admin/login";
+  return LANDING_ROUTES.find(([feature]) => features.includes(feature))?.[1] ?? "/admin/login";
 }

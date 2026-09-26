@@ -4,7 +4,7 @@ import { ArrowLeft } from "lucide-react";
 import { prisma } from "@/lib/prisma";
 import { requireCeo } from "@/lib/session";
 import { ROLE_LABELS, type Role } from "@/lib/constants";
-import { CUSTOMIZABLE_FEATURES, FEATURE_LABELS, defaultFeaturesFor, resolveFeatures } from "@/lib/permissions";
+import { customizableFeaturesFor, FEATURE_LABELS, defaultFeaturesFor, resolveFeatures } from "@/lib/permissions";
 import { Card } from "@/components/ui/Card";
 import { updatePermissions, resetPermissions, updateUserInfo, resetUserPassword } from "../actions";
 
@@ -138,7 +138,7 @@ export default async function EditarUsuarioPage({ params }: { params: Promise<{ 
           <form action={updatePermissions} className="space-y-4">
             <input type="hidden" name="userId" value={user.id} />
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-3">
-              {CUSTOMIZABLE_FEATURES.map((feature) => (
+              {customizableFeaturesFor(role).map((feature) => (
                 <label key={feature} className="flex items-center gap-2.5 text-sm text-ink-secondary">
                   <input
                     type="checkbox"

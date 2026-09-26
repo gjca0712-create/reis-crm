@@ -8,6 +8,7 @@ export function StatTile({
   deltaDirection = "up",
   deltaIsGood = true,
   icon: Icon,
+  hint,
   className,
 }: {
   label: string;
@@ -16,6 +17,8 @@ export function StatTile({
   deltaDirection?: "up" | "down";
   deltaIsGood?: boolean;
   icon?: LucideIcon;
+  // Linha pequena de contexto embaixo do valor (ex.: "lucro bruto R$ 92 mil").
+  hint?: string;
   className?: string;
 }) {
   const deltaColor = delta ? ((deltaDirection === "up") === deltaIsGood ? "text-status-good" : "text-status-critical") : undefined;
@@ -31,6 +34,7 @@ export function StatTile({
         )}
       </div>
       <div className="text-2xl font-semibold text-ink-primary">{value}</div>
+      {hint && <div className="text-xs text-ink-muted mt-1">{hint}</div>}
       {delta && (
         <div className={cn("text-xs mt-1.5 font-medium", deltaColor)}>
           {deltaDirection === "up" ? "↑" : "↓"} {delta}

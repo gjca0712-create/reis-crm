@@ -13,7 +13,9 @@ export type AuditAction =
   | "user.password_reset"
   | "user.permissions_update"
   | "user.permissions_reset"
-  | "campaign.send";
+  | "campaign.send"
+  | "erp.demo_load"
+  | "erp.demo_clear";
 
 export const AUDIT_ACTION_LABELS: Record<AuditAction, string> = {
   "login.success": "Login realizado",
@@ -24,6 +26,8 @@ export const AUDIT_ACTION_LABELS: Record<AuditAction, string> = {
   "user.permissions_update": "Permissões personalizadas",
   "user.permissions_reset": "Permissões restauradas pro padrão",
   "campaign.send": "Campanha disparada",
+  "erp.demo_load": "Dados de demonstração do ERP carregados",
+  "erp.demo_clear": "Dados de demonstração do ERP apagados",
 };
 
 type AuditActor = { userId?: string; name: string; email?: string } | null;

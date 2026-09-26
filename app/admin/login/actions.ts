@@ -14,6 +14,8 @@ import { logAudit } from "@/lib/audit";
 // "next" pedido (ex: veio de um link direto ou de um redirect do middleware).
 const ROUTE_FEATURES: [string, Feature][] = [
   ["/admin/dashboard", "dashboard"],
+  ["/admin/financeiro", "financeiro"],
+  ["/admin/produtos", "produtos"],
   ["/admin/indicadores", "indicadores"],
   ["/admin/vendas", "vendas"],
   ["/admin/bairros", "bairros"],
@@ -24,7 +26,14 @@ const ROUTE_FEATURES: [string, Feature][] = [
   ["/admin/auditoria", "auditoria"],
 ];
 
-function resolveNext(requested: string, features: Feature[]): string {
+// Só volta pra uma tela do próprio painel: um "next" externo (https://..., //site,
+// /\site) mandaria quem acabou de logar pra uma página falsa.
+function isSafeAdminPath(path: string): boolean {
+  return (path === "/admin" || path.startsWith("/admin/") || path.startsWith("/admin?")) && !path.includes("\\");
+}
+
+function resolveNext(rawRequested: string, features: Feature[]): string {
+  const requested = isSafeAdminPath(rawRequested) ? rawRequested : "";
   const match = ROUTE_FEATURES.find(([prefix]) => requested === prefix || requested.startsWith(`${prefix}/`));
   if (match && !canAccess(features, match[1])) {
     return defaultRouteFor(features);

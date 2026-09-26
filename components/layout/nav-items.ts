@@ -11,6 +11,8 @@ import {
   AlertTriangle,
   UserPlus,
   History,
+  Landmark,
+  Package,
   type LucideIcon,
 } from "lucide-react";
 import type { Feature } from "@/lib/permissions";
@@ -19,6 +21,8 @@ export type NavItem = { href: string; label: string; icon: LucideIcon; feature: 
 
 export const NAV_ITEMS: NavItem[] = [
   { href: "/admin/dashboard", label: "Dashboard", icon: LayoutDashboard, feature: "dashboard" },
+  { href: "/admin/financeiro", label: "Financeiro", icon: Landmark, feature: "financeiro" },
+  { href: "/admin/produtos", label: "Produtos", icon: Package, feature: "produtos" },
   { href: "/admin/clientes", label: "Clientes", icon: Users, feature: "clientes" },
   { href: "/admin/leads", label: "Leads (site)", icon: UserPlus, feature: "leads" },
   { href: "/admin/indicadores", label: "Indicadores", icon: Handshake, feature: "indicadores" },
