@@ -23,7 +23,8 @@ model User {
   createdAt    DateTime @default(now())
 
   sentMessages          Message[]
-  resolvedConversations Conversation[]
+  resolvedConversations Conversation[] @relation("ResolvedConversations")
+  assignedConversations Conversation[] @relation("AssignedConversations")
   ratings               Rating[]
   occurrencesReported   Occurrence[]
 }
@@ -161,8 +162,15 @@ model Conversation {
   // Preenchido quando um atendente marca a conversa como resolvida — é esse
   // atendente que fica creditado pela avaliação pedida em seguida.
   resolvedById    String?
-  resolvedBy      User?    @relation(fields: [resolvedById], references: [id])
+  resolvedBy      User?    @relation("ResolvedConversations", fields: [resolvedById], references: [id])
   ratingRequested Boolean  @default(false)
+
+  // Atendente que "assumiu" essa conversa (fila de atendimento). Enquanto
+  // atribuída, some da lista de quem não é CEO/Gerente nem o próprio dono —
+  // ver o filtro em whatsapp/suporte/page.tsx. null = livre, qualquer um pode
+  // assumir.
+  assignedToId String?
+  assignedTo   User?   @relation("AssignedConversations", fields: [assignedToId], references: [id])
 
   messages Message[]
   rating   Rating?

@@ -10,14 +10,25 @@ import { Badge } from "@/components/ui/Badge";
 import { AutoRefresh } from "@/components/whatsapp/AutoRefresh";
 import { ReplyForm } from "@/components/whatsapp/ReplyForm";
 import { requireFeature } from "@/lib/session";
-import { connectWhatsAppAction, disconnectWhatsAppAction, sendSupportReply, resolveConversation } from "./actions";
+import {
+  connectWhatsAppAction,
+  disconnectWhatsAppAction,
+  cancelWhatsAppConnectionAction,
+  sendSupportReply,
+  resolveConversation,
+  claimConversation,
+  releaseConversation,
+} from "./actions";
 
 export default async function WhatsappSuportePage({
   searchParams,
 }: {
   searchParams: Promise<{ c?: string; aviso?: string }>;
 }) {
-  await requireFeature("whatsapp_suporte");
+  const session = await requireFeature("whatsapp_suporte");
+  // CEO e Gerente supervisionam a fila inteira; os demais só veem conversas
+  // livres + as que eles mesmos assumiram (ver claimConversation/actions.ts).
+  const canManageQueue = session.role === "CEO" || session.role === "GERENTE";
 
   const params = await searchParams;
 
@@ -41,13 +52,19 @@ export default async function WhatsappSuportePage({
           ? "A conversa foi marcada como resolvida, mas o pedido de avaliação não foi enviado (linha do WhatsApp desconectada)."
           : params.aviso === "avaliacao-numero-invalido"
             ? "A conversa foi marcada como resolvida, mas o pedido de avaliação não foi enviado (o número de telefone salvo para esse contato é inválido)."
-            : null;
+            : params.aviso === "ja-assumida"
+              ? "Essa conversa já tinha sido assumida por outro atendente um instante antes."
+              : params.aviso === "assumida-por-outro"
+                ? "Essa conversa foi assumida por outro atendente — sua ação não foi aplicada (a resposta não foi enviada)."
+                : null;
 
   const conversations = await prisma.conversation.findMany({
+    where: canManageQueue ? {} : { OR: [{ assignedToId: null }, { assignedToId: session.userId }] },
     orderBy: { lastMessageAt: "desc" },
     include: {
       customer: { select: { id: true, name: true, phone: true, bairro: true } },
       rating: true,
+      assignedTo: { select: { id: true, name: true } },
       // Só a última mensagem, pra saber se quem falou por último foi o
       // cliente (ainda não respondemos — negrito, igual o próprio WhatsApp)
       // ou nós (já respondido — peso normal).
@@ -56,17 +73,24 @@ export default async function WhatsappSuportePage({
   });
 
   const activeId = params.c ?? conversations[0]?.id;
-  const active = activeId
+  const activeRaw = activeId
     ? await prisma.conversation.findUnique({
         where: { id: activeId },
         include: {
           customer: true,
           rating: true,
           resolvedBy: { select: { name: true } },
+          assignedTo: { select: { id: true, name: true } },
           messages: { orderBy: { createdAt: "asc" }, include: { sender: { select: { name: true } } } },
         },
       })
     : null;
+  // Mesma regra da lista: quem não é CEO/Gerente não abre (nem por link
+  // direto com o id) uma conversa assumida por outro atendente.
+  const active =
+    activeRaw && !canManageQueue && activeRaw.assignedToId && activeRaw.assignedToId !== session.userId
+      ? null
+      : activeRaw;
 
   return (
     <div className="space-y-4">
@@ -104,6 +128,12 @@ export default async function WhatsappSuportePage({
                     Desconectar
                   </button>
                 </form>
+              ) : s.status === "connecting" || s.status === "qr" ? (
+                <form action={cancelWhatsAppConnectionAction.bind(null, s.line)}>
+                  <button type="submit" className="text-sm text-ink-muted hover:text-ink-secondary hover:underline">
+                    Cancelar
+                  </button>
+                </form>
               ) : s.status === "disconnected" ? (
                 <form action={connectWhatsAppAction.bind(null, s.line)}>
                   <button
@@ -114,6 +144,9 @@ export default async function WhatsappSuportePage({
                   </button>
                 </form>
               ) : null}
+              {s.status === "disconnected" && s.lastError && (
+                <p className="w-full text-xs text-status-critical">{s.lastError}</p>
+              )}
             </div>
           ))}
         </div>
@@ -176,6 +209,12 @@ export default async function WhatsappSuportePage({
                       {formatPhone(c.customer.phone)}
                       <span className={unanswered ? "" : "text-ink-secondary"}> · {whatsappLineLabel(c.line)}</span>
                       {c.rating && <span className="text-gold-400"> · {c.rating.score}★</span>}
+                      {c.assignedTo && (
+                        <span className="text-gold-400">
+                          {" "}
+                          · {c.assignedTo.id === session.userId ? "Com você" : `Com ${c.assignedTo.name}`}
+                        </span>
+                      )}
                     </div>
                   </div>
                 </Link>
@@ -201,6 +240,29 @@ export default async function WhatsappSuportePage({
                     {active.status === "OPEN" ? "Em aberto" : "Resolvido"}
                     {active.resolvedBy ? ` por ${active.resolvedBy.name}` : ""}
                   </Badge>
+                  {active.assignedTo ? (
+                    <>
+                      <Badge status="warning">
+                        {active.assignedTo.id === session.userId ? "Com você" : `Com ${active.assignedTo.name}`}
+                      </Badge>
+                      {(active.assignedTo.id === session.userId || canManageQueue) && (
+                        <form action={releaseConversation.bind(null, active.id)}>
+                          <button type="submit" className="text-xs text-ink-muted hover:text-ink-secondary hover:underline">
+                            Liberar
+                          </button>
+                        </form>
+                      )}
+                    </>
+                  ) : active.status === "OPEN" ? (
+                    <form action={claimConversation.bind(null, active.id)}>
+                      <button
+                        type="submit"
+                        className="inline-flex items-center gap-1.5 text-xs text-gold-400 hover:text-gold-300"
+                      >
+                        Assumir atendimento
+                      </button>
+                    </form>
+                  ) : null}
                   {active.status === "OPEN" && (
                     <form action={resolveConversation.bind(null, active.id)}>
                       <button

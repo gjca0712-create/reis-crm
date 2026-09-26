@@ -1,5 +1,6 @@
 import path from "node:path";
 import { existsSync } from "node:fs";
+import { rm } from "node:fs/promises";
 import makeWASocket, {
   useMultiFileAuthState,
   DisconnectReason,
@@ -36,6 +37,14 @@ type WhatsAppRuntime = {
   qr: string | null;
   phoneNumber: string | null;
   starting: boolean;
+  // Incrementa a cada tentativa (e no cancelamento) — uma tentativa antiga que
+  // termine depois (ex.: busca de versão lenta) vê que não é mais a atual e desiste.
+  attempt: number;
+  // Quedas seguidas sem nunca chegar a QR/conectado — pra parar o loop de
+  // reconexão em vez de ficar em "Conectando..." pra sempre.
+  failuresBeforeReady: number;
+  // Motivo da última falha, mostrado na tela (sem acesso fácil aos logs).
+  lastError: string | null;
 };
 
 // globalThis para sobreviver ao hot-reload do Next em dev, igual ao lib/prisma.ts.
@@ -87,9 +96,22 @@ function alreadyProcessedPhoneReply(id: string | undefined): boolean {
 function runtimeFor(line: WhatsAppLineId): WhatsAppRuntime {
   let r = runtimes.get(line);
   if (!r) {
-    r = { socket: null, status: "disconnected", qr: null, phoneNumber: null, starting: false };
+    r = {
+      socket: null,
+      status: "disconnected",
+      qr: null,
+      phoneNumber: null,
+      starting: false,
+      attempt: 0,
+      failuresBeforeReady: 0,
+      lastError: null,
+    };
     runtimes.set(line, r);
   }
+  // Em dev o Map sobrevive ao hot-reload com objetos de antes desses campos existirem.
+  r.attempt ??= 0;
+  r.failuresBeforeReady ??= 0;
+  r.lastError ??= null;
   return r;
 }
 
@@ -103,21 +125,32 @@ const logger = pino({ level: "warn" });
 // desatualizada (o padrão embutido no pacote) é uma causa clássica de mensagem
 // "presa" no destinatário. Busca uma vez por processo e reaproveita — se a
 // busca falhar (rede instável), cai no padrão do pacote em vez de travar a conexão.
+// Timeout obrigatório: sem ele (o padrão do axios é esperar pra sempre), uma
+// busca que pendura deixava a linha presa em "Conectando..." sem botão nenhum.
 let cachedVersion: [number, number, number] | null = null;
 async function getBaileysVersion(): Promise<[number, number, number] | undefined> {
   if (cachedVersion) return cachedVersion;
   try {
-    const { version } = await fetchLatestBaileysVersion();
-    cachedVersion = version;
+    const { version, isLatest } = await fetchLatestBaileysVersion({ timeout: 5000 });
+    // Só guarda se veio mesmo da internet — o fallback do pacote não pode
+    // ficar fixo o processo inteiro, a próxima tentativa busca de novo.
+    if (isLatest) cachedVersion = version;
     return version;
   } catch {
     return undefined;
   }
 }
 
+// Quantas quedas seguidas antes de chegar a QR/conectado a gente tolera antes
+// de desistir e mostrar o motivo na tela (evita "Conectando..." infinito).
+const MAX_FAILURES_BEFORE_READY = 5;
+// Rede de segurança: se uma tentativa ficar em "Conectando..." mais que isso
+// sem QR nem conexão, é abandonada (o próprio Baileys já desiste do socket em 20s).
+const CONNECT_WATCHDOG_MS = 60_000;
+
 export function getWhatsAppState(line: WhatsAppLineId) {
   const r = runtimeFor(line);
-  return { line, status: r.status, qr: r.qr, phoneNumber: r.phoneNumber };
+  return { line, status: r.status, qr: r.qr, phoneNumber: r.phoneNumber, lastError: r.lastError };
 }
 
 export type WhatsAppLineState = ReturnType<typeof getWhatsAppState>;
@@ -137,6 +170,9 @@ export async function ensureWhatsAppStarted(line: WhatsAppLineId): Promise<void>
   const r = runtimeFor(line);
   if (r.starting || r.status !== "disconnected") return;
   if (!hasPairedCredentials(line)) return;
+  // Já desistiu depois de várias falhas seguidas — não fica religando a cada
+  // atualização da página; volta a tentar quando alguém clicar em Conectar.
+  if (r.failuresBeforeReady >= MAX_FAILURES_BEFORE_READY) return;
   await startWhatsAppConnection(line).catch((err) => {
     console.error(`Falha ao religar o WhatsApp (${line}) automaticamente:`, err);
   });
@@ -146,15 +182,63 @@ export async function ensureAllWhatsAppStarted(): Promise<void> {
   await Promise.all(WHATSAPP_LINE_IDS.map((line) => ensureWhatsAppStarted(line)));
 }
 
-export async function startWhatsAppConnection(line: WhatsAppLineId): Promise<void> {
+// Abandona a tentativa atual (socket, QR, reconexão agendada) sem deslogar —
+// credencial salva continua valendo. Com `reason`, é desistência por falha e o
+// motivo aparece na tela; sem, é o atendente cancelando.
+function abandonAttempt(line: WhatsAppLineId, reason: string | null): void {
+  const r = runtimeFor(line);
+  r.attempt += 1; // invalida timers/awaits pendentes da tentativa que está saindo
+  const sock = r.socket;
+  r.socket = null; // antes do end(): o "close" desse socket passa a ser ignorado
+  r.status = "disconnected";
+  r.qr = null;
+  r.starting = false;
+  r.lastError = reason;
+  if (reason) console.warn(`WhatsApp (${line}): ${reason}`);
+  try {
+    sock?.end(undefined);
+  } catch {
+    // já fechado
+  }
+}
+
+export function cancelWhatsAppConnection(line: WhatsAppLineId): void {
+  const r = runtimeFor(line);
+  if (r.status === "connected") return;
+  abandonAttempt(line, null);
+}
+
+// `manual` = alguém clicou em Conectar: zera o contador de falhas, dando uma
+// nova rodada de tentativas mesmo depois de ter desistido.
+export async function startWhatsAppConnection(line: WhatsAppLineId, opts?: { manual?: boolean }): Promise<void> {
   const r = runtimeFor(line);
   if (r.starting || r.status === "connected") return;
+  if (opts?.manual) {
+    r.failuresBeforeReady = 0;
+    r.lastError = null;
+  }
+  r.attempt += 1;
+  const attempt = r.attempt;
+  const isCurrent = () => r.attempt === attempt;
   r.starting = true;
   r.status = "connecting";
+  r.qr = null;
+
+  setTimeout(() => {
+    if (isCurrent() && r.status === "connecting") {
+      abandonAttempt(line, "Tempo esgotado tentando conectar ao WhatsApp. Clique em Conectar pra tentar de novo.");
+    }
+  }, CONNECT_WATCHDOG_MS);
 
   try {
     const { state, saveCreds } = await useMultiFileAuthState(authDir(line));
     const version = await getBaileysVersion();
+    if (!isCurrent()) return; // cancelada/abandonada enquanto preparava
+
+    // Chegou a mostrar QR ou conectar nesta tentativa — uma queda depois disso
+    // é normal (ex.: o WhatsApp reinicia a conexão logo após ler o QR) e não
+    // conta como falha.
+    let reachedReady = false;
 
     const sock = makeWASocket({
       auth: state,
@@ -179,11 +263,17 @@ export async function startWhatsAppConnection(line: WhatsAppLineId): Promise<voi
       const { connection, lastDisconnect, qr } = update;
 
       if (qr) {
+        reachedReady = true;
+        r.failuresBeforeReady = 0;
+        r.lastError = null;
         r.qr = qr;
         r.status = "qr";
       }
 
       if (connection === "open") {
+        reachedReady = true;
+        r.failuresBeforeReady = 0;
+        r.lastError = null;
         r.status = "connected";
         r.qr = null;
         r.starting = false;
@@ -194,15 +284,38 @@ export async function startWhatsAppConnection(line: WhatsAppLineId): Promise<voi
         r.status = "disconnected";
         r.socket = null;
         r.starting = false;
+        r.qr = null;
 
-        const statusCode = (lastDisconnect?.error as Boom | undefined)?.output?.statusCode;
-        const loggedOut = statusCode === DisconnectReason.loggedOut;
+        const error = lastDisconnect?.error as Boom | undefined;
+        const statusCode = error?.output?.statusCode;
+        console.warn(
+          `WhatsApp (${line}) fechou a conexão: código ${statusCode ?? "?"} — ${error?.message ?? "sem detalhe"}`
+        );
+
+        // Aparelho removido pelo celular: a credencial salva não serve mais, e
+        // mantê-la faria o próximo "Conectar" tentar logar com ela (e cair de
+        // novo) em vez de mostrar um QR novo.
+        if (statusCode === DisconnectReason.loggedOut) {
+          r.lastError = "Este aparelho foi desconectado pelo celular. Clique em Conectar e leia o QR de novo.";
+          void rm(authDir(line), { recursive: true, force: true }).catch(() => {});
+          return;
+        }
+
+        if (!reachedReady) r.failuresBeforeReady += 1;
+        if (r.failuresBeforeReady >= MAX_FAILURES_BEFORE_READY) {
+          r.lastError = `O WhatsApp recusou a conexão ${r.failuresBeforeReady} vezes seguidas (código ${
+            statusCode ?? "desconhecido"
+          }). Clique em Conectar pra tentar de novo.`;
+          return;
+        }
 
         // Espera antes de tentar de novo — sem isso, se o WhatsApp ficar
-        // derrubando o socket, isso vira um loop apertado de reconexão.
-        if (!loggedOut) {
-          setTimeout(() => void startWhatsAppConnection(line), 3000);
-        }
+        // derrubando o socket, isso vira um loop apertado de reconexão. Só
+        // religa se ninguém cancelou/reiniciou nesse meio-tempo.
+        const scheduledFrom = r.attempt;
+        setTimeout(() => {
+          if (r.attempt === scheduledFrom && r.status === "disconnected") void startWhatsAppConnection(line);
+        }, 3000);
       }
     });
 
@@ -222,25 +335,40 @@ export async function startWhatsAppConnection(line: WhatsAppLineId): Promise<voi
       }
     });
   } catch (err) {
-    r.status = "disconnected";
-    r.starting = false;
-    throw err;
+    console.error(`Falha ao iniciar a conexão do WhatsApp (${line}):`, err);
+    if (isCurrent()) {
+      abandonAttempt(
+        line,
+        `Não foi possível iniciar a conexão (${err instanceof Error ? err.message : String(err)}).`
+      );
+    }
   }
 }
 
+// "Desconectar" = desparear de vez: desloga no WhatsApp e apaga a credencial
+// salva no volume, senão o próximo "Conectar" tentaria usar a credencial já
+// invalidada em vez de mostrar um QR novo.
 export async function disconnectWhatsApp(line: WhatsAppLineId): Promise<void> {
   const r = runtimeFor(line);
-  if (r.socket) {
-    try {
-      await r.socket.logout();
-    } catch {
-      // já desconectado — sem problema
-    }
-  }
+  const sock = r.socket;
+  // Solta antes do logout: o "close" (loggedOut) que o próprio logout dispara
+  // é ignorado, em vez de aparecer como "desconectado pelo celular".
+  r.attempt += 1;
   r.socket = null;
   r.status = "disconnected";
   r.qr = null;
   r.phoneNumber = null;
+  r.starting = false;
+  r.lastError = null;
+  r.failuresBeforeReady = 0;
+  if (sock) {
+    try {
+      await sock.logout();
+    } catch {
+      // já desconectado — sem problema
+    }
+  }
+  await rm(authDir(line), { recursive: true, force: true }).catch(() => {});
 }
 
 function jidFor(phone: string): string | null {

@@ -4,15 +4,94 @@ import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { prisma } from "@/lib/prisma";
 import { requireFeature } from "@/lib/session";
-import { startWhatsAppConnection, disconnectWhatsApp, isSendablePhone } from "@/lib/whatsapp/client";
+import {
+  startWhatsAppConnection,
+  disconnectWhatsApp,
+  cancelWhatsAppConnection,
+  isSendablePhone,
+} from "@/lib/whatsapp/client";
 import { sendWhatsAppMessage, sendWhatsAppMedia } from "@/lib/whatsapp/send";
 import { isWhatsAppLineId, toWhatsAppLineId } from "@/lib/whatsapp/lines";
 import { saveMediaBuffer, mediaCategoryFromMimetype } from "@/lib/whatsapp/media";
+import type { SessionPayload } from "@/lib/auth";
+
+// CEO e Gerente enxergam e mexem em qualquer conversa (supervisão), mesmo já
+// assumida por outro atendente — ver também o filtro da lista em page.tsx.
+function canManageQueue(role: string): boolean {
+  return role === "CEO" || role === "GERENTE";
+}
+
+// Conversa assumida por OUTRO atendente — a tela já esconde, mas a action
+// confere de novo: a tela do atendente só atualiza a cada 12s, então ele pode
+// clicar "Enviar"/"Resolvido" numa conversa que um colega acabou de assumir.
+// Quem chama redireciona com aviso em vez de lançar erro (erro de server
+// action vira a tela genérica "Algo deu errado" em produção).
+function isHeldByAnother(conversation: { assignedToId: string | null }, session: SessionPayload): boolean {
+  return Boolean(
+    conversation.assignedToId && conversation.assignedToId !== session.userId && !canManageQueue(session.role)
+  );
+}
+
+// Assume a conversa pra fila pessoal do atendente. Update condicional
+// (assignedToId: null no where) em vez de ler-depois-gravar — evita que dois
+// atendentes clicando "Assumir" ao mesmo tempo assumam a mesma conversa. Só
+// conversa em aberto: a resolvida nunca é reaproveitada (a próxima mensagem do
+// cliente abre outra, ver lib/whatsapp/inbound.ts), assumir ela só esconderia
+// o histórico dos colegas.
+export async function claimConversation(conversationId: string) {
+  const session = await requireFeature("whatsapp_suporte");
+
+  const result = await prisma.conversation.updateMany({
+    where: { id: conversationId, assignedToId: null, status: "OPEN" },
+    data: { assignedToId: session.userId },
+  });
+
+  // count 0 também acontece quando a própria pessoa já tinha assumido (clique
+  // duplo, outra aba) — só avisa se quem está com ela é outro atendente.
+  let lostRace = false;
+  if (result.count === 0) {
+    const current = await prisma.conversation.findUnique({
+      where: { id: conversationId },
+      select: { assignedToId: true },
+    });
+    lostRace = Boolean(current?.assignedToId && current.assignedToId !== session.userId);
+  }
+
+  revalidatePath("/admin/whatsapp/suporte");
+  redirect(`/admin/whatsapp/suporte?c=${conversationId}${lostRace ? "&aviso=ja-assumida" : ""}`);
+}
+
+// Devolve a conversa pra fila (livre pra qualquer um assumir de novo). Só
+// quem assumiu ou CEO/Gerente pode liberar — o botão já só aparece pra eles,
+// isso é a segunda checagem do lado do servidor.
+export async function releaseConversation(conversationId: string) {
+  const session = await requireFeature("whatsapp_suporte");
+
+  const conversation = await prisma.conversation.findUnique({
+    where: { id: conversationId },
+    select: { assignedToId: true },
+  });
+  if (!conversation) return;
+  if (conversation.assignedToId !== session.userId && !canManageQueue(session.role)) return;
+
+  await prisma.conversation.update({ where: { id: conversationId }, data: { assignedToId: null } });
+  revalidatePath("/admin/whatsapp/suporte");
+  redirect(`/admin/whatsapp/suporte?c=${conversationId}`);
+}
 
 export async function connectWhatsAppAction(line: string) {
   await requireFeature("whatsapp_suporte");
   if (!isWhatsAppLineId(line)) return;
-  await startWhatsAppConnection(line);
+  await startWhatsAppConnection(line, { manual: true });
+  revalidatePath("/admin/whatsapp/suporte");
+}
+
+// Sai de "Conectando..."/QR sem deslogar nada — pra quando a tentativa travou
+// ou ninguém vai ler o QR agora.
+export async function cancelWhatsAppConnectionAction(line: string) {
+  await requireFeature("whatsapp_suporte");
+  if (!isWhatsAppLineId(line)) return;
+  cancelWhatsAppConnection(line);
   revalidatePath("/admin/whatsapp/suporte");
 }
 
@@ -38,6 +117,7 @@ export async function sendSupportReply(conversationId: string, formData: FormDat
     include: { customer: true },
   });
   if (!conversation) return;
+  if (isHeldByAnother(conversation, session)) redirect("/admin/whatsapp/suporte?aviso=assumida-por-outro");
 
   const line = toWhatsAppLineId(conversation.line);
   const phone = conversation.customer.phone;
@@ -103,6 +183,7 @@ export async function resolveConversation(conversationId: string) {
     include: { customer: true },
   });
   if (!conversation) return;
+  if (isHeldByAnother(conversation, session)) redirect("/admin/whatsapp/suporte?aviso=assumida-por-outro");
 
   const ratingMessage = "Como você avalia nosso atendimento? Responda com um número de 1 a 5. Muito obrigado! 🙏";
   const sent = await sendWhatsAppMessage(
@@ -116,7 +197,9 @@ export async function resolveConversation(conversationId: string) {
       where: { id: conversationId },
       // Só entra em "modo avaliação" (próxima mensagem do cliente vira nota) se o
       // pedido realmente saiu — senão o cliente responde outra coisa e vira 1-5 sem contexto.
-      data: { status: "RESOLVED", resolvedById: session.userId, ratingRequested: sent },
+      // Solta a atribuição: resolvida volta a ser histórico visível pra todos
+      // (quem atendeu continua registrado em resolvedById).
+      data: { status: "RESOLVED", resolvedById: session.userId, ratingRequested: sent, assignedToId: null },
     }),
     ...(sent
       ? [
