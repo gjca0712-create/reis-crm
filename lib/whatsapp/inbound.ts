@@ -17,6 +17,22 @@ export type InboundMedia = {
 // (app/api/whatsapp/bradial/webhook). Não depende do formato de nenhum dos dois —
 // recebe a linha que recebeu a mensagem, o telefone (já sem DDI 55) e o texto.
 
+// Pedido de avaliação mandado ao resolver a conversa (resolveConversation).
+// Fica aqui porque apagar esse pedido tem que tirar a conversa do "modo
+// avaliação" — senão o próximo "2" do cliente vira nota sem ele ter visto a pergunta.
+export const RATING_PROMPT = "Como você avalia nosso atendimento? Responda com um número de 1 a 5. Muito obrigado! 🙏";
+
+export function isRatingPrompt(message: { body: string; originalBody: string | null }): boolean {
+  return (message.originalBody ?? message.body) === RATING_PROMPT;
+}
+
+export async function stopWaitingForRating(conversationId: string): Promise<void> {
+  await prisma.conversation.updateMany({
+    where: { id: conversationId, ratingRequested: true },
+    data: { ratingRequested: false },
+  });
+}
+
 function parseRatingReply(text: string): number | null {
   const match = text.trim().match(/^([1-5])$/);
   return match ? Number(match[1]) : null;
@@ -56,26 +72,46 @@ export async function findPhoneByWhatsAppLid(lid: string): Promise<string | null
   return customer?.phone ?? null;
 }
 
+// Id da mensagem no WhatsApp (key.id) e a conversa onde ela está — ver
+// Message.waMessageId. waSentAt: quando ela saiu no WhatsApp (ver Message.waSentAt).
+// Opcionais: o webhook do Bradial não manda.
+type WaIds = { waMessageId?: string | null; waRemoteJid?: string | null; waSentAt?: Date | null };
+
+export type InboundExtras = WaIds & {
+  media?: InboundMedia;
+  pushName?: string | null;
+  lid?: string | null;
+};
+
+// A mesma mensagem já registrada (reconexão que reentrega, eco de envio feito
+// pelo próprio CRM depois de um restart que limpou o cache em memória).
+async function alreadyStored(waMessageId: string | null | undefined, direction: "IN" | "OUT"): Promise<boolean> {
+  if (!waMessageId) return false;
+  const found = await prisma.message.findFirst({
+    where: { direction, OR: [{ waMessageId }, { waCaptionMessageId: waMessageId }] },
+    select: { id: true },
+  });
+  return Boolean(found);
+}
+
 export async function processInboundWhatsAppMessage(
   line: WhatsAppLineId,
   phone: string,
   text: string,
-  media?: InboundMedia,
-  pushName?: string | null,
-  lid?: string | null
+  extras: InboundExtras = {}
 ): Promise<void> {
-  if (!phone || (!text && !media)) return;
-  await withPhoneLock(phone, () => processInboundWhatsAppMessageLocked(line, phone, text, media, pushName, lid));
+  if (!phone || (!text && !extras.media)) return;
+  await withPhoneLock(phone, () => processInboundWhatsAppMessageLocked(line, phone, text, extras));
 }
 
 async function processInboundWhatsAppMessageLocked(
   line: WhatsAppLineId,
   phone: string,
   text: string,
-  media?: InboundMedia,
-  pushName?: string | null,
-  lid?: string | null
+  { media, pushName, lid, waMessageId, waRemoteJid, waSentAt }: InboundExtras
 ): Promise<void> {
+  if (await alreadyStored(waMessageId, "IN")) return;
+
   let customer = await prisma.customer.findFirst({ where: { phone } });
   if (!customer) {
     // Igual ao WhatsApp Web: usa o nome que a própria pessoa colocou no perfil
@@ -142,6 +178,9 @@ async function processInboundWhatsAppMessageLocked(
         mediaType: media?.type,
         mediaMimeType: media?.mimeType,
         mediaFileName: media?.fileName,
+        waMessageId,
+        waRemoteJid,
+        waSentAt,
       },
     }),
     prisma.conversation.update({ where: { id: target.id }, data: { lastMessageAt: new Date(), status: "OPEN" } }),
@@ -157,18 +196,20 @@ export async function processOutboundFromPhone(
   line: WhatsAppLineId,
   phone: string,
   text: string,
-  media?: InboundMedia
+  extras: WaIds & { media?: InboundMedia } = {}
 ): Promise<void> {
-  if (!phone || (!text && !media)) return;
-  await withPhoneLock(phone, () => processOutboundFromPhoneLocked(line, phone, text, media));
+  if (!phone || (!text && !extras.media)) return;
+  await withPhoneLock(phone, () => processOutboundFromPhoneLocked(line, phone, text, extras));
 }
 
 async function processOutboundFromPhoneLocked(
   line: WhatsAppLineId,
   phone: string,
   text: string,
-  media?: InboundMedia
+  { media, waMessageId, waRemoteJid, waSentAt }: WaIds & { media?: InboundMedia }
 ): Promise<void> {
+  if (await alreadyStored(waMessageId, "OUT")) return;
+
   const customer = await prisma.customer.findFirst({ where: { phone } });
   if (!customer) return;
 
@@ -188,8 +229,109 @@ async function processOutboundFromPhoneLocked(
         mediaType: media?.type,
         mediaMimeType: media?.mimeType,
         mediaFileName: media?.fileName,
+        waMessageId,
+        waRemoteJid,
+        waSentAt,
       },
     }),
     prisma.conversation.update({ where: { id: conversation.id }, data: { lastMessageAt: new Date() } }),
   ]);
+}
+
+// --- Mensagem apagada pra todos / editada no próprio WhatsApp ------------------
+//
+// fromMe (de quem veio o aviso) amarra em qual lado da conversa pode mexer:
+// o cliente só apaga/edita as mensagens DELE (IN); o celular pareado, as nossas
+// (OUT). O id de uma mensagem nossa chega no aparelho do cliente, então sem
+// essa amarra um aviso forjado por ele poderia "apagar" uma resposta nossa.
+function sideWhere(line: WhatsAppLineId, fromMe: boolean) {
+  return { direction: fromMe ? "OUT" : "IN", deletedAt: null, conversation: { line } };
+}
+
+function waMessageWhere(line: WhatsAppLineId, waMessageId: string, fromMe: boolean) {
+  return { ...sideWhere(line, fromMe), OR: [{ waMessageId }, { waCaptionMessageId: waMessageId }] };
+}
+
+// Áudio com legenda: no WhatsApp são duas mensagens (o áudio e o texto logo
+// depois — ver sendWhatsAppMedia), no CRM uma linha só. Quando só a legenda
+// some, o áudio continua com o cliente: tira o texto (guardado em originalBody)
+// e o id dela — não tem mais o que editar nem apagar dela.
+export async function removeAudioCaption(message: { id: string; body: string; originalBody: string | null }) {
+  await prisma.message.updateMany({
+    where: { id: message.id, deletedAt: null },
+    data: {
+      body: "",
+      originalBody: message.originalBody ?? message.body,
+      editedAt: new Date(),
+      waCaptionMessageId: null,
+    },
+  });
+}
+
+export async function applyWhatsAppRevoke(line: WhatsAppLineId, waMessageId: string, fromMe: boolean): Promise<void> {
+  const message = await prisma.message.findFirst({ where: { ...sideWhere(line, fromMe), waMessageId } });
+  if (!message) {
+    const withCaption = await prisma.message.findFirst({
+      where: { ...sideWhere(line, fromMe), waCaptionMessageId: waMessageId },
+    });
+    if (withCaption) await removeAudioCaption(withCaption);
+    return;
+  }
+
+  if (message.waCaptionMessageId) {
+    // Apagaram só o áudio: a legenda continua com o cliente. Vira duas linhas —
+    // o áudio apagado e o texto que ficou (que ainda dá pra editar/apagar).
+    await prisma.$transaction([
+      prisma.message.create({
+        data: {
+          conversationId: message.conversationId,
+          direction: message.direction,
+          body: "",
+          senderId: message.senderId,
+          createdAt: message.createdAt,
+          mediaUrl: message.mediaUrl,
+          mediaType: message.mediaType,
+          mediaMimeType: message.mediaMimeType,
+          mediaFileName: message.mediaFileName,
+          waMessageId: message.waMessageId,
+          waRemoteJid: message.waRemoteJid,
+          waSentAt: message.waSentAt,
+          deletedAt: new Date(),
+        },
+      }),
+      prisma.message.update({
+        where: { id: message.id },
+        data: {
+          waMessageId: message.waCaptionMessageId,
+          waCaptionMessageId: null,
+          mediaUrl: null,
+          mediaType: null,
+          mediaMimeType: null,
+          mediaFileName: null,
+        },
+      }),
+    ]);
+    return;
+  }
+
+  await prisma.message.updateMany({ where: { id: message.id, deletedAt: null }, data: { deletedAt: new Date() } });
+  if (fromMe && isRatingPrompt(message)) await stopWaitingForRating(message.conversationId);
+}
+
+export async function applyWhatsAppEdit(
+  line: WhatsAppLineId,
+  waMessageId: string,
+  fromMe: boolean,
+  text: string
+): Promise<void> {
+  const message = await prisma.message.findFirst({
+    where: waMessageWhere(line, waMessageId, fromMe),
+    select: { id: true, body: true, originalBody: true },
+  });
+  // Mesmo texto = nada mudou (reentrega do mesmo aviso).
+  if (!message || message.body === text) return;
+  await prisma.message.update({
+    where: { id: message.id },
+    data: { body: text, editedAt: new Date(), originalBody: message.originalBody ?? message.body },
+  });
 }

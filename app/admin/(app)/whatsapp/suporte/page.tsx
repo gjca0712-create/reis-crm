@@ -1,14 +1,16 @@
 import Link from "next/link";
-import { MessageCircle, ExternalLink, CheckCircle2, AlertTriangle } from "lucide-react";
+import { MessageCircle, ExternalLink, CheckCircle2, AlertTriangle, Ban } from "lucide-react";
 import { prisma } from "@/lib/prisma";
 import { formatDateTime, formatPhone, whatsappLink } from "@/lib/format";
 import { getAllWhatsAppStates, ensureAllWhatsAppStarted } from "@/lib/whatsapp/client";
 import { whatsappLineLabel } from "@/lib/whatsapp/lines";
 import { qrToDataUrl } from "@/lib/whatsapp/qr";
+import { canManageQueue as managesQueue, sentMessagePermissions } from "@/lib/whatsapp/message-permissions";
 import { Card } from "@/components/ui/Card";
 import { Badge } from "@/components/ui/Badge";
 import { AutoRefresh } from "@/components/whatsapp/AutoRefresh";
 import { ReplyForm } from "@/components/whatsapp/ReplyForm";
+import { MessageActions } from "@/components/whatsapp/MessageActions";
 import { requireFeature } from "@/lib/session";
 import {
   connectWhatsAppAction,
@@ -18,6 +20,8 @@ import {
   resolveConversation,
   claimConversation,
   releaseConversation,
+  editSupportMessage,
+  deleteSupportMessage,
 } from "./actions";
 
 // Fundo bem fraco em cada conversa da lista, só pra identificar o estado de
@@ -39,6 +43,23 @@ const ROW_TONES = {
   resolved: { idle: "bg-status-good/10 hover:bg-status-good/15", active: "bg-status-good/20" },
 } as const;
 
+const AVISOS: Record<string, string> = {
+  "nao-entregue":
+    "A resposta foi salva na conversa, mas essa linha do WhatsApp está desconectada — o cliente não recebeu. Reconecte acima e reenvie.",
+  "numero-invalido":
+    "A resposta foi salva na conversa, mas o número de telefone salvo para esse contato é inválido — o cliente não recebeu. Corrija o telefone do cliente antes de reenviar.",
+  "avaliacao-nao-enviada":
+    "A conversa foi marcada como resolvida, mas o pedido de avaliação não foi enviado (linha do WhatsApp desconectada).",
+  "avaliacao-numero-invalido":
+    "A conversa foi marcada como resolvida, mas o pedido de avaliação não foi enviado (o número de telefone salvo para esse contato é inválido).",
+  "ja-assumida": "Essa conversa já tinha sido assumida por outro atendente um instante antes.",
+  "assumida-por-outro":
+    "Essa conversa foi assumida por outro atendente — sua ação não foi aplicada (a resposta não foi enviada).",
+};
+
+// Anexo de uma mensagem apagada: a mídia sai da conversa, fica só a menção.
+const MEDIA_LABELS: Record<string, string> = { image: "foto", video: "vídeo", audio: "áudio", document: "documento" };
+
 function rowTone(status: string, unanswered: boolean) {
   if (status === "RESOLVED") return ROW_TONES.resolved;
   return unanswered ? ROW_TONES.unanswered : ROW_TONES.inProgress;
@@ -52,7 +73,7 @@ export default async function WhatsappSuportePage({
   const session = await requireFeature("whatsapp_suporte");
   // CEO e Gerente supervisionam a fila inteira; os demais só veem conversas
   // livres + as que eles mesmos assumiram (ver claimConversation/actions.ts).
-  const canManageQueue = session.role === "CEO" || session.role === "GERENTE";
+  const canManageQueue = managesQueue(session.role);
 
   const params = await searchParams;
 
@@ -67,20 +88,7 @@ export default async function WhatsappSuportePage({
   }
   const anyPairing = waStates.some((s) => s.status === "qr" || s.status === "connecting");
 
-  const aviso =
-    params.aviso === "nao-entregue"
-      ? "A resposta foi salva na conversa, mas essa linha do WhatsApp está desconectada — o cliente não recebeu. Reconecte acima e reenvie."
-      : params.aviso === "numero-invalido"
-        ? "A resposta foi salva na conversa, mas o número de telefone salvo para esse contato é inválido — o cliente não recebeu. Corrija o telefone do cliente antes de reenviar."
-        : params.aviso === "avaliacao-nao-enviada"
-          ? "A conversa foi marcada como resolvida, mas o pedido de avaliação não foi enviado (linha do WhatsApp desconectada)."
-          : params.aviso === "avaliacao-numero-invalido"
-            ? "A conversa foi marcada como resolvida, mas o pedido de avaliação não foi enviado (o número de telefone salvo para esse contato é inválido)."
-            : params.aviso === "ja-assumida"
-              ? "Essa conversa já tinha sido assumida por outro atendente um instante antes."
-              : params.aviso === "assumida-por-outro"
-                ? "Essa conversa foi assumida por outro atendente — sua ação não foi aplicada (a resposta não foi enviada)."
-                : null;
+  const aviso = params.aviso ? (AVISOS[params.aviso] ?? null) : null;
 
   const conversations = await prisma.conversation.findMany({
     where: canManageQueue ? {} : { OR: [{ assignedToId: null }, { assignedToId: session.userId }] },
@@ -91,8 +99,9 @@ export default async function WhatsappSuportePage({
       assignedTo: { select: { id: true, name: true } },
       // Só a última mensagem, pra saber se quem falou por último foi o
       // cliente (ainda não respondemos — negrito, igual o próprio WhatsApp)
-      // ou nós (já respondido — peso normal).
-      messages: { orderBy: { createdAt: "desc" }, take: 1, select: { direction: true } },
+      // ou nós (já respondido — peso normal). Apagada pra todos não conta: a
+      // resposta que sumiu não respondeu nada.
+      messages: { where: { deletedAt: null }, orderBy: { createdAt: "desc" }, take: 1, select: { direction: true } },
     },
   });
 
@@ -323,8 +332,48 @@ export default async function WhatsappSuportePage({
               </div>
 
               <div className="flex-1 overflow-y-auto px-5 py-4 space-y-3">
-                {active.messages.map((m) => (
-                  <div key={m.id} className={`flex flex-col ${m.direction === "OUT" ? "items-end" : "items-start"}`}>
+                {active.messages.map((m) => {
+                  const out = m.direction === "OUT";
+                  const senderLabel = m.sender ? m.sender.name : "Respondido pelo celular";
+
+                  // Apagada pra todos (pelo CRM, pelo celular ou pelo cliente):
+                  // igual o WhatsApp mostra o aviso no lugar, mas a equipe ainda
+                  // enxerga o que era, riscado — é histórico do atendimento.
+                  if (m.deletedAt) {
+                    const who = !out ? "pelo cliente" : m.deletedByName ? `por ${m.deletedByName}` : "pelo celular";
+                    const mediaLabel = m.mediaType ? (MEDIA_LABELS[m.mediaType] ?? "anexo") : null;
+                    // Legenda de áudio apagada antes (body vazio): o texto ficou em originalBody.
+                    const deletedText = m.body || m.originalBody;
+                    return (
+                      <div key={m.id} className={`flex flex-col ${out ? "items-end" : "items-start"}`}>
+                        <div
+                          className={`max-w-[75%] rounded-2xl px-4 py-2.5 text-sm border border-dashed border-border text-ink-muted ${
+                            out ? "rounded-br-sm" : "rounded-bl-sm"
+                          }`}
+                        >
+                          <p className="flex items-center gap-1.5 italic">
+                            <Ban className="w-3.5 h-3.5 shrink-0" /> Mensagem apagada {who}
+                          </p>
+                          {(deletedText || mediaLabel) && (
+                            <p className="mt-1 text-xs line-through opacity-70 whitespace-pre-wrap">
+                              {mediaLabel && `[${mediaLabel}${m.mediaFileName ? `: ${m.mediaFileName}` : ""}] `}
+                              {deletedText}
+                            </p>
+                          )}
+                          <p className="text-[10px] mt-1">
+                            {formatDateTime(m.createdAt)} · apagada em {formatDateTime(m.deletedAt)}
+                          </p>
+                        </div>
+                        {out && <span className="text-[10px] text-ink-muted mt-0.5 mr-1">{senderLabel}</span>}
+                      </div>
+                    );
+                  }
+
+                  const rules = out ? sentMessagePermissions(m, session) : null;
+                  const showActions = Boolean(rules && (rules.canEdit || rules.canDelete));
+
+                  return (
+                  <div key={m.id} className={`group flex flex-col ${out ? "items-end" : "items-start"}`}>
                     <div
                       className={`max-w-[75%] rounded-2xl px-4 py-2.5 text-sm ${
                         m.direction === "OUT"
@@ -360,18 +409,33 @@ export default async function WhatsappSuportePage({
                           📎 {m.mediaFileName ?? "Abrir arquivo"}
                         </a>
                       )}
-                      {m.body && <p>{m.body}</p>}
-                      <p className={`text-[10px] mt-1 ${m.direction === "OUT" ? "text-page/70" : "text-ink-muted"}`}>
+                      {m.body && <p className="whitespace-pre-wrap">{m.body}</p>}
+                      <p className={`text-[10px] mt-1 ${out ? "text-page/70" : "text-ink-muted"}`}>
                         {formatDateTime(m.createdAt)}
+                        {m.editedAt && (
+                          <span title={m.originalBody ? `Antes da edição: ${m.originalBody}` : undefined}>
+                            {" "}
+                            · editada
+                          </span>
+                        )}
                       </p>
                     </div>
-                    {m.direction === "OUT" && (
-                      <span className="text-[10px] text-ink-muted mt-0.5 mr-1">
-                        {m.sender ? m.sender.name : "Respondido pelo celular"}
-                      </span>
+                    {showActions ? (
+                      <MessageActions
+                        // Remonta depois de uma edição salva: fecha a caixa e
+                        // pega o texto novo.
+                        key={m.editedAt?.getTime() ?? 0}
+                        senderLabel={senderLabel}
+                        text={m.body}
+                        editAction={rules?.canEdit ? editSupportMessage.bind(null, m.id) : undefined}
+                        deleteAction={rules?.canDelete ? deleteSupportMessage.bind(null, m.id) : undefined}
+                      />
+                    ) : (
+                      out && <span className="text-[10px] text-ink-muted mt-0.5 mr-1">{senderLabel}</span>
                     )}
                   </div>
-                ))}
+                  );
+                })}
                 {active.messages.length === 0 && <p className="text-sm text-ink-muted">Nenhuma mensagem ainda.</p>}
               </div>
 

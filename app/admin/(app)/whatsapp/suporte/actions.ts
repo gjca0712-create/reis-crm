@@ -9,17 +9,21 @@ import {
   disconnectWhatsApp,
   cancelWhatsAppConnection,
   isSendablePhone,
+  deleteWhatsAppMessageForEveryone,
+  editWhatsAppMessage,
+  type WaSendResult,
 } from "@/lib/whatsapp/client";
 import { sendWhatsAppMessage, sendWhatsAppMedia } from "@/lib/whatsapp/send";
 import { isWhatsAppLineId, toWhatsAppLineId } from "@/lib/whatsapp/lines";
 import { saveMediaBuffer, mediaCategoryFromMimetype } from "@/lib/whatsapp/media";
+import {
+  canManageQueue,
+  sentMessagePermissions,
+  type MessageActionResult,
+} from "@/lib/whatsapp/message-permissions";
+import { RATING_PROMPT, isRatingPrompt, stopWaitingForRating, removeAudioCaption } from "@/lib/whatsapp/inbound";
+import { logAudit } from "@/lib/audit";
 import type { SessionPayload } from "@/lib/auth";
-
-// CEO e Gerente enxergam e mexem em qualquer conversa (supervisão), mesmo já
-// assumida por outro atendente — ver também o filtro da lista em page.tsx.
-function canManageQueue(role: string): boolean {
-  return role === "CEO" || role === "GERENTE";
-}
 
 // Conversa assumida por OUTRO atendente — a tela já esconde, mas a action
 // confere de novo: a tela do atendente só atualiza a cada 12s, então ele pode
@@ -122,7 +126,7 @@ export async function sendSupportReply(conversationId: string, formData: FormDat
   const line = toWhatsAppLineId(conversation.line);
   const phone = conversation.customer.phone;
 
-  let sent: boolean;
+  let result: WaSendResult;
   let mediaUrl: string | undefined;
   let mediaType: string | undefined;
   let mediaMimeType: string | undefined;
@@ -137,15 +141,16 @@ export async function sendSupportReply(conversationId: string, formData: FormDat
     mediaFileName = mediaFile.name || undefined;
 
     // Responde SEMPRE pela mesma linha que recebeu a conversa.
-    sent = await sendWhatsAppMedia(line, phone, {
+    result = await sendWhatsAppMedia(line, phone, {
       buffer,
       mimetype,
       fileName: mediaFileName,
       caption: body || undefined,
     });
   } else {
-    sent = await sendWhatsAppMessage(line, phone, body);
+    result = await sendWhatsAppMessage(line, phone, body);
   }
+  const sent = result.sent;
 
   await prisma.$transaction([
     prisma.message.create({
@@ -158,6 +163,9 @@ export async function sendSupportReply(conversationId: string, formData: FormDat
         mediaType,
         mediaMimeType,
         mediaFileName,
+        waMessageId: result.ref?.id,
+        waRemoteJid: result.ref?.remoteJid,
+        waCaptionMessageId: result.ref?.captionId,
       },
     }),
     prisma.conversation.update({ where: { id: conversationId }, data: { lastMessageAt: new Date() } }),
@@ -185,11 +193,10 @@ export async function resolveConversation(conversationId: string) {
   if (!conversation) return;
   if (isHeldByAnother(conversation, session)) redirect("/admin/whatsapp/suporte?aviso=assumida-por-outro");
 
-  const ratingMessage = "Como você avalia nosso atendimento? Responda com um número de 1 a 5. Muito obrigado! 🙏";
-  const sent = await sendWhatsAppMessage(
+  const { sent, ref } = await sendWhatsAppMessage(
     toWhatsAppLineId(conversation.line),
     conversation.customer.phone,
-    ratingMessage
+    RATING_PROMPT
   );
 
   await prisma.$transaction([
@@ -204,7 +211,14 @@ export async function resolveConversation(conversationId: string) {
     ...(sent
       ? [
           prisma.message.create({
-            data: { conversationId, direction: "OUT", body: ratingMessage, senderId: session.userId },
+            data: {
+              conversationId,
+              direction: "OUT",
+              body: RATING_PROMPT,
+              senderId: session.userId,
+              waMessageId: ref?.id,
+              waRemoteJid: ref?.remoteJid,
+            },
           }),
         ]
       : []),
@@ -218,4 +232,108 @@ export async function resolveConversation(conversationId: string) {
       ? "avaliacao-nao-enviada"
       : "avaliacao-numero-invalido";
   redirect(`/admin/whatsapp/suporte?c=${conversationId}${aviso ? `&aviso=${aviso}` : ""}`);
+}
+
+
+// --- Editar / apagar pra todos uma mensagem já enviada -------------------------
+// Regras em lib/whatsapp/message-permissions.ts (a tela só mostra os botões
+// quando dá; aqui confere de novo — a tela pode estar aberta há minutos e o
+// prazo do WhatsApp ter passado nesse meio-tempo).
+// Sem redirect no fim, de propósito: redirect remonta a tela inteira e apagaria
+// a resposta que o atendente estiver digitando na caixa de baixo. Quando não
+// dá, devolve o aviso pra tela mostrar ao lado da mensagem.
+
+async function loadSentMessage(messageId: string) {
+  return prisma.message.findUnique({
+    where: { id: messageId },
+    include: {
+      conversation: { select: { id: true, line: true, assignedToId: true, customer: { select: { name: true } } } },
+    },
+  });
+}
+
+export async function editSupportMessage(
+  messageId: string,
+  _prev: MessageActionResult,
+  formData: FormData
+): Promise<MessageActionResult> {
+  const session = await requireFeature("whatsapp_suporte");
+  const newBody = String(formData.get("body") || "").trim();
+
+  const message = await loadSentMessage(messageId);
+  if (!message) return { aviso: "indisponivel" };
+  if (isHeldByAnother(message.conversation, session)) redirect("/admin/whatsapp/suporte?aviso=assumida-por-outro");
+
+  const rules = sentMessagePermissions(message, session);
+  if (!rules.editable) return { aviso: "indisponivel" };
+  if (!rules.canEdit) return { aviso: "edicao-fora-do-prazo" };
+  if (!newBody || newBody === message.body) return undefined;
+
+  // Áudio com legenda: o texto está na mensagem separada (ver sendWhatsAppMedia).
+  const ok = await editWhatsAppMessage(
+    toWhatsAppLineId(message.conversation.line),
+    message.waCaptionMessageId ?? message.waMessageId!,
+    message.waRemoteJid!,
+    newBody
+  );
+  if (!ok) return { aviso: "edicao-nao-enviada" };
+
+  await prisma.message.update({
+    where: { id: message.id },
+    data: { body: newBody, editedAt: new Date(), originalBody: message.originalBody ?? message.body },
+  });
+  await logAudit({
+    actor: session,
+    action: "whatsapp.message_edit",
+    targetId: message.id,
+    targetLabel: message.conversation.customer.name,
+    details: { antes: message.body, depois: newBody },
+  });
+
+  revalidatePath("/admin/whatsapp/suporte");
+  return undefined;
+}
+
+export async function deleteSupportMessage(messageId: string): Promise<MessageActionResult> {
+  const session = await requireFeature("whatsapp_suporte");
+
+  const message = await loadSentMessage(messageId);
+  if (!message) return { aviso: "indisponivel" };
+  if (isHeldByAnother(message.conversation, session)) redirect("/admin/whatsapp/suporte?aviso=assumida-por-outro");
+
+  const rules = sentMessagePermissions(message, session);
+  if (!rules.allowed) return { aviso: "indisponivel" };
+  if (!rules.canDelete) return { aviso: "apagar-fora-do-prazo" };
+
+  const line = toWhatsAppLineId(message.conversation.line);
+  // Áudio com legenda: a legenda (mensagem de texto separada) sai primeiro. Se
+  // o áudio falhar depois, a linha fica só com ele — e dá pra tentar de novo.
+  if (message.waCaptionMessageId) {
+    const captionOk = await deleteWhatsAppMessageForEveryone(line, message.waCaptionMessageId, message.waRemoteJid!);
+    if (!captionOk) return { aviso: "apagar-nao-enviado" };
+  }
+  const ok = await deleteWhatsAppMessageForEveryone(line, message.waMessageId!, message.waRemoteJid!);
+  if (!ok) {
+    if (message.waCaptionMessageId) {
+      await removeAudioCaption(message);
+      revalidatePath("/admin/whatsapp/suporte");
+    }
+    return { aviso: "apagar-nao-enviado" };
+  }
+
+  await prisma.message.update({
+    where: { id: message.id },
+    data: { deletedAt: new Date(), deletedByName: session.name },
+  });
+  if (isRatingPrompt(message)) await stopWaitingForRating(message.conversationId);
+  await logAudit({
+    actor: session,
+    action: "whatsapp.message_delete",
+    targetId: message.id,
+    targetLabel: message.conversation.customer.name,
+    details: { texto: message.body, anexo: message.mediaFileName ?? message.mediaType ?? null },
+  });
+
+  revalidatePath("/admin/whatsapp/suporte");
+  return undefined;
 }

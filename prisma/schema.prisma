@@ -194,6 +194,31 @@ model Message {
   // Quem enviou (só se aplica a mensagens OUT enviadas por um atendente logado).
   senderId String?
   sender   User?   @relation(fields: [senderId], references: [id])
+
+  // Onde a mensagem está no WhatsApp: key.id + a conversa (remoteJid). É o que
+  // precisa pra apagar pra todos/editar depois, e pra reconhecer quando o
+  // cliente (ou o celular pareado) apaga/edita. null = mensagem de antes disso
+  // existir, ou que não chegou a sair.
+  waMessageId        String?
+  waRemoteJid        String?
+  // Áudio com legenda sai como DUAS mensagens no WhatsApp (áudio não aceita
+  // legenda — ver sendWhatsAppMedia em lib/whatsapp/client.ts): esta é a do texto.
+  waCaptionMessageId String?
+  // Quando saiu no WhatsApp, pras que chegam por ele (cliente / celular pareado).
+  // Difere de createdAt (hora em que o CRM gravou) quando chega atrasada — e é
+  // daqui que contam os prazos de editar/apagar do WhatsApp. createdAt continua
+  // sendo a ordem da conversa (e o "sem resposta" da lista).
+  waSentAt           DateTime?
+
+  editedAt      DateTime?
+  originalBody  String? // texto antes da primeira edição (histórico interno)
+  // Apagada pra todos — por nós (CRM ou celular) ou pelo cliente. O conteúdo
+  // continua guardado aqui pro histórico interno; a tela mostra como apagada.
+  deletedAt     DateTime?
+  deletedByName String? // atendente que apagou pelo CRM (null = celular/cliente)
+
+  @@index([waMessageId])
+  @@index([waCaptionMessageId])
 }
 
 // Avaliação do atendimento, coletada do cliente após a conversa ser resolvida.
