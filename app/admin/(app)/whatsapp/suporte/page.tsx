@@ -1,11 +1,17 @@
 import Link from "next/link";
-import { MessageCircle, ExternalLink, CheckCircle2, AlertTriangle, Ban } from "lucide-react";
+import { MessageCircle, ExternalLink, CheckCircle2, AlertTriangle, Ban, ChevronDown } from "lucide-react";
 import { prisma } from "@/lib/prisma";
 import { formatDateTime, formatPhone, whatsappLink } from "@/lib/format";
 import { getAllWhatsAppStates, ensureAllWhatsAppStarted } from "@/lib/whatsapp/client";
 import { whatsappLineLabel } from "@/lib/whatsapp/lines";
 import { qrToDataUrl } from "@/lib/whatsapp/qr";
 import { canManageQueue as managesQueue, sentMessagePermissions } from "@/lib/whatsapp/message-permissions";
+import {
+  QUEUE_SECTION_EMPTY,
+  QUEUE_SECTION_LABELS,
+  groupByQueueSection,
+  queueListWhere,
+} from "@/lib/whatsapp/queue";
 import { Card } from "@/components/ui/Card";
 import { Badge } from "@/components/ui/Badge";
 import { AutoRefresh } from "@/components/whatsapp/AutoRefresh";
@@ -71,8 +77,8 @@ export default async function WhatsappSuportePage({
   searchParams: Promise<{ c?: string; aviso?: string }>;
 }) {
   const session = await requireFeature("whatsapp_suporte");
-  // CEO e Gerente supervisionam a fila inteira; os demais só veem conversas
-  // livres + as que eles mesmos assumiram (ver claimConversation/actions.ts).
+  // CEO e Gerente supervisionam a fila inteira; os demais só veem a própria
+  // fila — em espera + as que estão com eles (ver lib/whatsapp/queue.ts).
   const canManageQueue = managesQueue(session.role);
 
   const params = await searchParams;
@@ -91,7 +97,7 @@ export default async function WhatsappSuportePage({
   const aviso = params.aviso ? (AVISOS[params.aviso] ?? null) : null;
 
   const conversations = await prisma.conversation.findMany({
-    where: canManageQueue ? {} : { OR: [{ assignedToId: null }, { assignedToId: session.userId }] },
+    where: queueListWhere(session),
     orderBy: { lastMessageAt: "desc" },
     include: {
       customer: { select: { id: true, name: true, phone: true, bairro: true } },
@@ -105,7 +111,8 @@ export default async function WhatsappSuportePage({
     },
   });
 
-  const activeId = params.c ?? conversations[0]?.id;
+  const sections = groupByQueueSection(conversations, session);
+  const activeId = params.c ?? sections.flatMap((s) => s.conversations)[0]?.id;
   const activeRaw = activeId
     ? await prisma.conversation.findUnique({
         where: { id: activeId },
@@ -125,11 +132,54 @@ export default async function WhatsappSuportePage({
       ? null
       : activeRaw;
 
+  // Uma linha da lista: cor pelo estado (ver ROW_TONES) e negrito quando o
+  // cliente falou por último (ainda sem resposta), igual o próprio WhatsApp.
+  const renderRow = (c: (typeof conversations)[number]) => {
+    const unanswered = c.messages[0]?.direction === "IN";
+    const tone = rowTone(c.status, unanswered);
+    const isActive = c.id === activeId;
+    return (
+      <Link
+        key={c.id}
+        href={`/admin/whatsapp/suporte?c=${c.id}`}
+        className={`flex items-start gap-3 px-4 py-3 border-b border-border/60 transition-colors ${
+          isActive ? `${tone.active} shadow-[inset_3px_0_0_0_#D4AF37]` : tone.idle
+        }`}
+      >
+        <div className="w-9 h-9 rounded-full bg-gold-400/15 border border-gold-700/40 flex items-center justify-center text-xs font-semibold text-gold-400 shrink-0">
+          {c.customer.name.slice(0, 1).toUpperCase()}
+        </div>
+        <div className="min-w-0 flex-1">
+          <span
+            className={`block text-sm text-ink-primary truncate ${unanswered ? "font-semibold" : "font-normal"}`}
+          >
+            {c.customer.name}
+          </span>
+          <div
+            className={`text-xs truncate ${unanswered ? "text-ink-primary font-semibold" : "text-ink-muted font-normal"}`}
+          >
+            {formatPhone(c.customer.phone)}
+            <span className={unanswered ? "" : "text-ink-secondary"}> · {whatsappLineLabel(c.line)}</span>
+            {c.rating && <span className="text-gold-400"> · {c.rating.score}★</span>}
+            {/* "Com você" já é o título da seção; aqui só quando é de um colega. */}
+            {c.assignedTo && c.assignedTo.id !== session.userId && (
+              <span className="text-gold-400"> · Com {c.assignedTo.name}</span>
+            )}
+          </div>
+        </div>
+      </Link>
+    );
+  };
+
   return (
     <div className="space-y-4">
       <div>
         <h1 className="text-xl font-semibold text-ink-primary">WhatsApp Suporte</h1>
-        <p className="text-sm text-ink-muted mt-0.5">Conversas de atendimento com clientes · duas linhas</p>
+        <p className="text-sm text-ink-muted mt-0.5">
+          {canManageQueue
+            ? "Conversas de atendimento com clientes · duas linhas"
+            : "Sua fila: clientes em espera e os que estão com você · duas linhas"}
+        </p>
       </div>
 
       {aviso && (
@@ -218,50 +268,62 @@ export default async function WhatsappSuportePage({
             <span className="inline-flex items-center gap-1.5">
               <span className="w-2.5 h-2.5 rounded-sm bg-[rgba(250,204,21,0.45)]" /> Em atendimento
             </span>
-            <span className="inline-flex items-center gap-1.5">
-              <span className="w-2.5 h-2.5 rounded-sm bg-status-good/40" /> Finalizada
-            </span>
+            {canManageQueue && (
+              <span className="inline-flex items-center gap-1.5">
+                <span className="w-2.5 h-2.5 rounded-sm bg-status-good/40" /> Finalizada
+              </span>
+            )}
           </div>
           <div className="overflow-y-auto flex-1">
-            {conversations.map((c) => {
-              const unanswered = c.messages[0]?.direction === "IN";
-              const tone = rowTone(c.status, unanswered);
-              const isActive = c.id === activeId;
-              return (
-                <Link
-                  key={c.id}
-                  href={`/admin/whatsapp/suporte?c=${c.id}`}
-                  className={`flex items-start gap-3 px-4 py-3 border-b border-border/60 transition-colors ${
-                    isActive ? `${tone.active} shadow-[inset_3px_0_0_0_#D4AF37]` : tone.idle
-                  }`}
+            {sections.map(({ section, conversations: rows }) => {
+              const label = QUEUE_SECTION_LABELS[section];
+              const empty = QUEUE_SECTION_EMPTY[section];
+              if (rows.length === 0 && !empty) return null;
+              const count = (
+                <span
+                  className={
+                    section === "waiting" && rows.length > 0
+                      ? "rounded-full bg-[rgba(244,63,94,0.3)] px-1.5 text-ink-primary"
+                      : "text-ink-muted"
+                  }
                 >
-                  <div className="w-9 h-9 rounded-full bg-gold-400/15 border border-gold-700/40 flex items-center justify-center text-xs font-semibold text-gold-400 shrink-0">
-                    {c.customer.name.slice(0, 1).toUpperCase()}
+                  {rows.length}
+                </span>
+              );
+              const body =
+                rows.length > 0 ? (
+                  rows.map(renderRow)
+                ) : (
+                  <p className="px-4 py-3 text-xs text-ink-muted">{empty}</p>
+                );
+
+              // Finalizadas (só CEO/Gerente) começam recolhidas: é histórico,
+              // e empurraria a fila pra baixo. Abre sozinha se a conversa
+              // aberta à direita está nela.
+              if (section === "resolved") {
+                return (
+                  <details key={section} className="group" open={rows.some((c) => c.id === activeId)}>
+                    <summary className="sticky top-0 z-10 flex cursor-pointer list-none items-center justify-between gap-2 border-b border-border bg-surface-raised px-4 py-1.5 text-[11px] font-semibold uppercase tracking-wide text-ink-secondary [&::-webkit-details-marker]:hidden">
+                      <span className="inline-flex items-center gap-1">
+                        <ChevronDown className="w-3.5 h-3.5 -rotate-90 transition-transform group-open:rotate-0" />
+                        {label}
+                      </span>
+                      {count}
+                    </summary>
+                    {body}
+                  </details>
+                );
+              }
+              return (
+                <section key={section}>
+                  <div className="sticky top-0 z-10 flex items-center justify-between gap-2 border-b border-border bg-surface-raised px-4 py-1.5 text-[11px] font-semibold uppercase tracking-wide text-ink-secondary">
+                    <span>{label}</span>
+                    {count}
                   </div>
-                  <div className="min-w-0 flex-1">
-                    <span
-                      className={`block text-sm text-ink-primary truncate ${unanswered ? "font-semibold" : "font-normal"}`}
-                    >
-                      {c.customer.name}
-                    </span>
-                    <div
-                      className={`text-xs truncate ${unanswered ? "text-ink-primary font-semibold" : "text-ink-muted font-normal"}`}
-                    >
-                      {formatPhone(c.customer.phone)}
-                      <span className={unanswered ? "" : "text-ink-secondary"}> · {whatsappLineLabel(c.line)}</span>
-                      {c.rating && <span className="text-gold-400"> · {c.rating.score}★</span>}
-                      {c.assignedTo && (
-                        <span className="text-gold-400">
-                          {" "}
-                          · {c.assignedTo.id === session.userId ? "Com você" : `Com ${c.assignedTo.name}`}
-                        </span>
-                      )}
-                    </div>
-                  </div>
-                </Link>
+                  {body}
+                </section>
               );
             })}
-            {conversations.length === 0 && <p className="text-sm text-ink-muted p-4">Nenhuma conversa ainda.</p>}
           </div>
         </Card>
 

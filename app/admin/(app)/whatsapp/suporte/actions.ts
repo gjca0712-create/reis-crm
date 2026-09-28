@@ -169,6 +169,13 @@ export async function sendSupportReply(conversationId: string, formData: FormDat
       },
     }),
     prisma.conversation.update({ where: { id: conversationId }, data: { lastMessageAt: new Date() } }),
+    // Quem responde uma conversa em espera assume ela: sai da espera dos
+    // colegas, e dois atendentes não respondem o mesmo cliente. Condicional,
+    // igual ao claimConversation — se alguém assumiu nesse meio-tempo, fica com ele.
+    prisma.conversation.updateMany({
+      where: { id: conversationId, assignedToId: null, status: "OPEN" },
+      data: { assignedToId: session.userId },
+    }),
   ]);
 
   revalidatePath("/admin/whatsapp/suporte");
@@ -181,8 +188,14 @@ export async function sendSupportReply(conversationId: string, formData: FormDat
   redirect(`/admin/whatsapp/suporte?c=${conversationId}${aviso ? `&aviso=${aviso}` : ""}`);
 }
 
-// Marca a conversa como resolvida, credita o atendente e dispara o pedido de
-// avaliação (1 a 5) pro cliente via WhatsApp.
+// Pedido de avaliação DESLIGADO (2026-09-28): a mesma mensagem automática pra
+// todo cliente atendido pode fazer o WhatsApp tratar a linha como spam. O
+// formato novo ainda vai ser decidido; WHATSAPP_RATING_PROMPT=1 no Railway
+// religa o de antes enquanto isso.
+const SEND_RATING_PROMPT = process.env.WHATSAPP_RATING_PROMPT === "1";
+
+// Marca a conversa como resolvida e credita o atendente. Com o pedido de
+// avaliação ligado, também manda a pergunta (1 a 5) pro cliente via WhatsApp.
 export async function resolveConversation(conversationId: string) {
   const session = await requireFeature("whatsapp_suporte");
 
@@ -193,19 +206,17 @@ export async function resolveConversation(conversationId: string) {
   if (!conversation) return;
   if (isHeldByAnother(conversation, session)) redirect("/admin/whatsapp/suporte?aviso=assumida-por-outro");
 
-  const { sent, ref } = await sendWhatsAppMessage(
-    toWhatsAppLineId(conversation.line),
-    conversation.customer,
-    RATING_PROMPT
-  );
+  const { sent, ref }: WaSendResult = SEND_RATING_PROMPT
+    ? await sendWhatsAppMessage(toWhatsAppLineId(conversation.line), conversation.customer, RATING_PROMPT)
+    : { sent: false, ref: null };
 
   await prisma.$transaction([
     prisma.conversation.update({
       where: { id: conversationId },
       // Só entra em "modo avaliação" (próxima mensagem do cliente vira nota) se o
       // pedido realmente saiu — senão o cliente responde outra coisa e vira 1-5 sem contexto.
-      // Solta a atribuição: resolvida volta a ser histórico visível pra todos
-      // (quem atendeu continua registrado em resolvedById).
+      // Solta a atribuição: resolvida sai da fila de todo mundo e vira
+      // histórico (quem atendeu continua registrado em resolvedById).
       data: { status: "RESOLVED", resolvedById: session.userId, ratingRequested: sent, assignedToId: null },
     }),
     ...(sent
@@ -226,11 +237,12 @@ export async function resolveConversation(conversationId: string) {
 
   revalidatePath("/admin/whatsapp/suporte");
 
-  const aviso = sent
-    ? null
-    : isSendablePhone(conversation.customer.phone)
-      ? "avaliacao-nao-enviada"
-      : "avaliacao-numero-invalido";
+  const aviso =
+    sent || !SEND_RATING_PROMPT
+      ? null
+      : isSendablePhone(conversation.customer.phone)
+        ? "avaliacao-nao-enviada"
+        : "avaliacao-numero-invalido";
   redirect(`/admin/whatsapp/suporte?c=${conversationId}${aviso ? `&aviso=${aviso}` : ""}`);
 }
 
