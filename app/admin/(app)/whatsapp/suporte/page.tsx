@@ -112,7 +112,10 @@ export default async function WhatsappSuportePage({
   });
 
   const sections = groupByQueueSection(conversations, session);
-  const activeId = params.c ?? sections.flatMap((s) => s.conversations)[0]?.id;
+  // Sem ?c=, abre a primeira da fila — nunca uma finalizada (igual ao
+  // firstInQueue, pra onde vai quem acabou de concluir um atendimento).
+  const activeId =
+    params.c ?? sections.filter((s) => s.section !== "resolved").flatMap((s) => s.conversations)[0]?.id;
   const activeRaw = activeId
     ? await prisma.conversation.findUnique({
         where: { id: activeId },

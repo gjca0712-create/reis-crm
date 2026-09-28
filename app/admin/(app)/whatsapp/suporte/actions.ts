@@ -22,6 +22,7 @@ import {
   type MessageActionResult,
 } from "@/lib/whatsapp/message-permissions";
 import { RATING_PROMPT, isRatingPrompt, stopWaitingForRating, removeAudioCaption } from "@/lib/whatsapp/inbound";
+import { firstInQueue } from "@/lib/whatsapp/queue";
 import { logAudit } from "@/lib/audit";
 import type { SessionPayload } from "@/lib/auth";
 
@@ -243,7 +244,11 @@ export async function resolveConversation(conversationId: string) {
       : isSendablePhone(conversation.customer.phone)
         ? "avaliacao-nao-enviada"
         : "avaliacao-numero-invalido";
-  redirect(`/admin/whatsapp/suporte?c=${conversationId}${aviso ? `&aviso=${aviso}` : ""}`);
+  // Concluída sai da tela: abre a próxima da fila (com o id na URL, senão a
+  // conversa aberta trocaria sozinha quando a lista reordena no auto-refresh).
+  const next = await firstInQueue(session);
+  const query = [next && `c=${next}`, aviso && `aviso=${aviso}`].filter(Boolean).join("&");
+  redirect(`/admin/whatsapp/suporte${query ? `?${query}` : ""}`);
 }
 
 

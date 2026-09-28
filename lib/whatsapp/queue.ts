@@ -1,4 +1,5 @@
 import type { Prisma } from "@prisma/client";
+import { prisma } from "@/lib/prisma";
 import { canManageQueue } from "./message-permissions";
 
 // Fila de atendimento do WhatsApp Suporte (whatsapp/suporte/page.tsx). Cada
@@ -51,4 +52,15 @@ export function groupByQueueSection<T extends QueuedConversation>(
     section,
     conversations: conversations.filter((c) => queueSection(c, viewer.userId) === section),
   }));
+}
+
+// A conversa que abre depois de concluir um atendimento: a primeira da fila na
+// ordem da tela, sem contar as finalizadas (nem pra CEO/Gerente). null = fila vazia.
+export async function firstInQueue(viewer: Viewer): Promise<string | null> {
+  const open = await prisma.conversation.findMany({
+    where: { AND: [queueListWhere(viewer), { status: { not: "RESOLVED" } }] },
+    orderBy: { lastMessageAt: "desc" },
+    select: { id: true, status: true, assignedToId: true },
+  });
+  return groupByQueueSection(open, viewer).flatMap((s) => s.conversations)[0]?.id ?? null;
 }
