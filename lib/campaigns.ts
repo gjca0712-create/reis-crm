@@ -12,11 +12,11 @@ export const SEGMENTS = [
 
 export const SEGMENT_LABELS: Record<string, string> = Object.fromEntries(SEGMENTS.map((s) => [s.value, s.label]));
 
-export type CampaignCustomer = { id: string; name: string; phone: string };
+export type CampaignCustomer = { id: string; name: string; phone: string; whatsappLid: string | null };
 
 export async function getSegmentCustomers(segmentType: string): Promise<CampaignCustomer[]> {
   const customers = await prisma.customer.findMany({
-    select: { id: true, name: true, phone: true, sales: { select: { date: true }, orderBy: { date: "desc" }, take: 1 } },
+    select: { id: true, name: true, phone: true, whatsappLid: true, sales: { select: { date: true }, orderBy: { date: "desc" }, take: 1 } },
   });
 
   if (segmentType === "todos") return customers;

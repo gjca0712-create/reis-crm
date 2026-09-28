@@ -61,11 +61,18 @@ export async function updateCustomer(customerId: string, formData: FormData) {
 
   const referredById = str(formData, "referredById");
 
+  // Telefone trocado: o @lid guardado era do número antigo e, se ficasse, as
+  // mensagens do CRM continuariam indo pra aquela conta (ver recipientJids em
+  // lib/whatsapp/client.ts). A próxima mensagem do cliente grava o novo.
+  const current = await prisma.customer.findUnique({ where: { id: customerId }, select: { phone: true } });
+  const phoneChanged = current?.phone !== phone;
+
   await prisma.customer.update({
     where: { id: customerId },
     data: {
       name,
       phone,
+      ...(phoneChanged ? { whatsappLid: null } : {}),
       bairro,
       email: str(formData, "email") || null,
       document: str(formData, "document") || null,

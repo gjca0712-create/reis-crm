@@ -80,6 +80,7 @@ type WaIds = { waMessageId?: string | null; waRemoteJid?: string | null; waSentA
 export type InboundExtras = WaIds & {
   media?: InboundMedia;
   pushName?: string | null;
+  // undefined = não se sabe (Bradial); null = veio sem @lid (apaga o guardado).
   lid?: string | null;
 };
 
@@ -127,11 +128,13 @@ async function processInboundWhatsAppMessageLocked(
         whatsappLid: lid || undefined,
       },
     });
-  } else if (lid && customer.whatsappLid !== lid) {
+  } else if (lid !== undefined && customer.whatsappLid !== lid) {
     // Guarda (ou atualiza) o @lid assim que uma mensagem recebida revela o
     // par lid<->cliente — é o único jeito de reconhecer depois uma resposta
     // mandada direto do celular pareado pra esse cliente, já que nesse caso o
-    // WhatsApp só entrega o @lid, nunca o telefone de verdade.
+    // WhatsApp só entrega o @lid, nunca o telefone de verdade. null (mensagem
+    // pelo telefone, sem @lid nenhum) apaga: um @lid velho mandaria as
+    // respostas pra outra conta (ver recipientJids em client.ts).
     customer = await prisma.customer.update({ where: { id: customer.id }, data: { whatsappLid: lid } });
   }
 

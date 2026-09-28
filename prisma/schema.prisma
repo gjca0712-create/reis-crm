@@ -221,6 +221,21 @@ model Message {
   @@index([waCaptionMessageId])
 }
 
+// Cópia exata (protobuf) de cada mensagem que o CRM mandou pelo WhatsApp, pelo
+// id dela lá. Quando o celular de quem recebeu não consegue abrir a mensagem,
+// ele pede reenvio — e o Baileys precisa do conteúdo original pra reenviar
+// (getMessage em lib/whatsapp/client.ts). Só em memória, a cópia sumia a cada
+// deploy/restart e a mensagem ficava em "Aguardando mensagem" pra sempre.
+// Guardada por 14 dias.
+model WaSentPayload {
+  id        String   @id // key.id da mensagem no WhatsApp
+  line      String
+  payload   Bytes
+  createdAt DateTime @default(now())
+
+  @@index([createdAt])
+}
+
 // Avaliação do atendimento, coletada do cliente após a conversa ser resolvida.
 model Rating {
   id             String       @id @default(cuid())

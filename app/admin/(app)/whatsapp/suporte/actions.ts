@@ -141,14 +141,14 @@ export async function sendSupportReply(conversationId: string, formData: FormDat
     mediaFileName = mediaFile.name || undefined;
 
     // Responde SEMPRE pela mesma linha que recebeu a conversa.
-    result = await sendWhatsAppMedia(line, phone, {
+    result = await sendWhatsAppMedia(line, conversation.customer, {
       buffer,
       mimetype,
       fileName: mediaFileName,
       caption: body || undefined,
     });
   } else {
-    result = await sendWhatsAppMessage(line, phone, body);
+    result = await sendWhatsAppMessage(line, conversation.customer, body);
   }
   const sent = result.sent;
 
@@ -195,7 +195,7 @@ export async function resolveConversation(conversationId: string) {
 
   const { sent, ref } = await sendWhatsAppMessage(
     toWhatsAppLineId(conversation.line),
-    conversation.customer.phone,
+    conversation.customer,
     RATING_PROMPT
   );
 

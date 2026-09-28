@@ -56,7 +56,7 @@ async function runCampaignSend(
 
   for (const customer of customers) {
     if (isSendablePhone(customer.phone)) {
-      const ok = await sendWhatsAppMessage(DEFAULT_WHATSAPP_LINE, customer.phone, message);
+      const ok = await sendWhatsAppMessage(DEFAULT_WHATSAPP_LINE, customer.phone, message, customer.whatsappLid);
       if (ok) sent++;
     }
 

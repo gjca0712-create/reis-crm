@@ -6,17 +6,22 @@ import makeWASocket, {
   DisconnectReason,
   downloadMediaMessage,
   fetchLatestBaileysVersion,
+  jidNormalizedUser,
+  makeCacheableSignalKeyStore,
   normalizeMessageContent,
+  proto,
   toNumber,
   WAMessageStubType,
+  type AnyMessageContent,
+  type BinaryNode,
   type WASocket,
   type WAMessage,
   type WAMessageUpdate,
-  type proto,
 } from "@whiskeysockets/baileys";
 import type { Boom } from "@hapi/boom";
 import pino from "pino";
 import { onlyDigits } from "@/lib/format";
+import { prisma } from "@/lib/prisma";
 import {
   processInboundWhatsAppMessage,
   processOutboundFromPhone,
@@ -61,23 +66,132 @@ const globalForWa = globalThis as unknown as {
 };
 const runtimes: Map<string, WhatsAppRuntime> = globalForWa.__waRuntimes ?? (globalForWa.__waRuntimes = new Map());
 
-// Cache do conteúdo das últimas mensagens enviadas, usado pelo `getMessage` do
-// socket (ver startWhatsAppConnection). Sem isso, quando o WhatsApp de quem
-// recebe pede reenvio por falha de descriptografia, o Baileys não tem o que
-// reenviar e a mensagem fica travada como "Aguardando mensagem" pra sempre.
+// Conteúdo das mensagens enviadas, usado pelo `getMessage` do socket (ver
+// startWhatsAppConnection). Sem isso, quando o WhatsApp de quem recebe pede
+// reenvio por falha de descriptografia, o Baileys não tem o que reenviar e a
+// mensagem fica travada como "Aguardando mensagem" pra sempre. Em memória (as
+// últimas 500, pro pedido que chega na hora) e no banco (WaSentPayload, pro que
+// chega depois de um deploy/restart — cliente estava sem internet, por ex.).
 const MAX_SENT_MESSAGES_CACHED = 500;
+const SENT_PAYLOAD_KEEP_MS = 14 * 24 * 60 * 60_000;
 const sentMessages: Map<string, proto.IMessage> =
   globalForWa.__waSentMessages ?? (globalForWa.__waSentMessages = new Map());
 
-function rememberSentMessage(msg: WAMessage | undefined): void {
-  const id = msg?.key?.id;
-  if (!id || !msg.message) return;
+function cacheSentContent(id: string, message: proto.IMessage): void {
   sentMessages.delete(id);
-  sentMessages.set(id, msg.message);
+  sentMessages.set(id, message);
   if (sentMessages.size > MAX_SENT_MESSAGES_CACHED) {
     const oldest = sentMessages.keys().next().value;
     if (oldest) sentMessages.delete(oldest);
   }
+}
+
+// Grava no banco em segundo plano: o envio não espera, e o cache em memória
+// cobre o pedido de reenvio que chegue logo em seguida.
+function persistSentContent(line: WhatsAppLineId, id: string, message: proto.IMessage): void {
+  let payload: Buffer;
+  try {
+    payload = Buffer.from(proto.Message.encode(message).finish());
+  } catch (err) {
+    console.error(`Erro ao preparar cópia da mensagem enviada ${id} (${line}):`, err);
+    return;
+  }
+  void prisma.waSentPayload
+    .upsert({ where: { id }, create: { id, line, payload }, update: { payload } })
+    .catch((err) => console.error(`Erro ao guardar cópia da mensagem enviada ${id} (${line}):`, err));
+}
+
+function rememberSentMessage(line: WhatsAppLineId, msg: WAMessage | undefined): void {
+  const id = msg?.key?.id;
+  if (!id || !msg.message) return;
+  cacheSentContent(id, msg.message);
+  persistSentContent(line, id, msg.message);
+}
+
+// Depois de editar/apagar, um pedido de reenvio atrasado da mensagem original
+// não pode mandar o texto antigo de novo (nem "desapagar" a mensagem).
+function replaceSentContent(line: WhatsAppLineId, id: string, message: proto.IMessage): void {
+  cacheSentContent(id, message);
+  persistSentContent(line, id, message);
+}
+
+// Ids apagados neste processo: cobre o intervalo entre apagar no WhatsApp e
+// marcar deletedAt no Message, e um deleteMany que falhe.
+const revokedSentIds = new Set<string>();
+
+function forgetSentMessage(id: string): void {
+  sentMessages.delete(id);
+  revokedSentIds.add(id);
+  if (revokedSentIds.size > MAX_SENT_MESSAGES_CACHED) {
+    const oldest = revokedSentIds.values().next().value;
+    if (oldest) revokedSentIds.delete(oldest);
+  }
+  void prisma.waSentPayload
+    .deleteMany({ where: { id } })
+    .catch((err) => console.error(`Erro ao descartar cópia da mensagem ${id}:`, err));
+}
+
+// getMessage do socket. Loga cada pedido de reenvio com o resultado — é o
+// que mostra nos logs do Railway ([wa-reenvio]) por que uma mensagem ficou em
+// "Aguardando mensagem" (o Baileys só loga isso em nível debug).
+async function findSentMessage(line: WhatsAppLineId, key: proto.IMessageKey): Promise<proto.IMessage | undefined> {
+  const id = key.id;
+  if (!id) return undefined;
+  const what = `(${line}) mensagem ${id} pedida por ${key.participant || key.remoteJid}`;
+
+  if (revokedSentIds.has(id)) {
+    console.warn(`[wa-reenvio] ${what}: mensagem apagada — não reenvia`);
+    return undefined;
+  }
+  const cached = sentMessages.get(id);
+  if (cached) {
+    console.warn(`[wa-reenvio] ${what}: reenviando (memória)`);
+    return cached;
+  }
+  // Separado da busca no Message abaixo: um erro aqui (tabela ainda não
+  // criada, banco instável) não pode impedir o reenvio pelo texto do histórico.
+  try {
+    const row = await prisma.waSentPayload.findUnique({ where: { id }, select: { payload: true } });
+    if (row) {
+      const deleted = await prisma.message.findFirst({
+        where: { direction: "OUT", waMessageId: id, deletedAt: { not: null } },
+        select: { id: true },
+      });
+      if (deleted) {
+        console.warn(`[wa-reenvio] ${what}: mensagem apagada — não reenvia`);
+        return undefined;
+      }
+      console.warn(`[wa-reenvio] ${what}: reenviando (banco)`);
+      return proto.Message.decode(row.payload);
+    }
+  } catch (err) {
+    console.error(`[wa-reenvio] ${what}: erro ao buscar a cópia guardada:`, err);
+  }
+  try {
+    // Mandada antes dessa cópia existir: texto puro dá pra refazer pelo Message.
+    const message = await prisma.message.findFirst({
+      where: { direction: "OUT", deletedAt: null, OR: [{ waMessageId: id, mediaType: null }, { waCaptionMessageId: id }] },
+      select: { body: true },
+    });
+    if (message?.body) {
+      console.warn(`[wa-reenvio] ${what}: reenviando (texto do histórico)`);
+      return { conversation: message.body };
+    }
+  } catch (err) {
+    console.error(`[wa-reenvio] ${what}: erro ao buscar a mensagem:`, err);
+  }
+  console.warn(`[wa-reenvio] ${what}: mensagem não encontrada — fica em "Aguardando mensagem" pra quem pediu`);
+  return undefined;
+}
+
+// Uma vez por processo: descarta as cópias com mais de 14 dias.
+let prunedSentPayloads = false;
+function pruneOldSentPayloads(): void {
+  if (prunedSentPayloads) return;
+  prunedSentPayloads = true;
+  void prisma.waSentPayload
+    .deleteMany({ where: { createdAt: { lt: new Date(Date.now() - SENT_PAYLOAD_KEEP_MS) } } })
+    .catch((err) => console.error("Erro ao limpar cópias antigas de mensagens enviadas:", err));
 }
 
 // Registra resposta mandada direto do celular pareado (fora do notify normal
@@ -125,7 +239,18 @@ function authDir(line: WhatsAppLineId): string {
   return path.join(process.cwd(), ".wa-auth", line);
 }
 
-const logger = pino({ level: "warn" });
+// WA_LOG_LEVEL=info (ou debug) no Railway mostra os logs internos do Baileys
+// quando precisar investigar entrega de mensagem. Valor que o pino não conhece
+// (ex.: "warning") derrubaria o módulo inteiro ao carregar — cai no "warn".
+const logger = pino({ level: waLogLevel(process.env.WA_LOG_LEVEL) });
+
+function waLogLevel(value: string | undefined): string {
+  const level = value?.trim().toLowerCase();
+  if (!level) return "warn";
+  if (level in pino.levels.values || level === "silent") return level;
+  console.warn(`WA_LOG_LEVEL="${value}" não existe — usando "warn".`);
+  return "warn";
+}
 
 // A versão do protocolo do WhatsApp Web muda com frequência; usar uma versão
 // desatualizada (o padrão embutido no pacote) é uma causa clássica de mensagem
@@ -246,13 +371,16 @@ export async function startWhatsAppConnection(line: WhatsAppLineId, opts?: { man
     // conta como falha.
     let reachedReady = false;
 
+    pruneOldSentPayloads();
     const sock = makeWASocket({
-      auth: state,
+      // Cache em memória das chaves de criptografia na frente dos arquivos —
+      // configuração recomendada pelo Baileys.
+      auth: { creds: state.creds, keys: makeCacheableSignalKeyStore(state.keys, logger) },
       logger,
       ...(version ? { version } : {}),
       // Ver comentário acima de `sentMessages` — sem isso, um pedido de
       // reenvio por falha de descriptografia não tem o que reenviar.
-      getMessage: async (key) => (key.id ? sentMessages.get(key.id) : undefined),
+      getMessage: (key) => findSentMessage(line, key),
       // Sem o "eco" do que o próprio CRM manda (resposta, edição, apagar): quem
       // envia já grava na hora. Ligado (padrão do Baileys), o eco fica retido
       // no buffer de eventos até o próximo pacote do WhatsApp e sai junto com
@@ -263,6 +391,16 @@ export async function startWhatsAppConnection(line: WhatsAppLineId, opts?: { man
       emitOwnEvents: false,
     });
     r.socket = sock;
+
+    // O celular de quem recebeu não conseguiu abrir uma mensagem nossa e pediu
+    // reenvio. Só loga (quem reenvia é o próprio Baileys, via getMessage) — junto
+    // com o [wa-reenvio] de findSentMessage, mostra de onde veio o pedido
+    // (telefone ou @lid) e se deu pra reenviar.
+    sock.ws.on("CB:receipt", (node: BinaryNode) => {
+      if (node.attrs?.type === "retry") {
+        console.warn(`[wa-reenvio] (${line}) pedido de reenvio recebido:`, JSON.stringify(node.attrs));
+      }
+    });
 
     sock.ev.on("creds.update", () => {
       if (r.socket === sock) void saveCreds();
@@ -442,29 +580,65 @@ function refOf(msg: WAMessage | undefined, jid: string): WaMessageRef | null {
 export const WHATSAPP_EDIT_WINDOW_MS = 15 * 60_000;
 export const WHATSAPP_DELETE_WINDOW_MS = 2 * 24 * 60 * 60_000;
 
-export async function sendWhatsAppText(line: WhatsAppLineId, phone: string, text: string): Promise<WaSendResult> {
+// Pra onde mandar uma mensagem nova pro cliente, em ordem de preferência.
+// Cliente que já escreveu pra gente por @lid (identificador novo do WhatsApp,
+// guardado em Customer.whatsappLid) recebe pelo @lid: o Baileys 6.7 guarda a
+// criptografia de quem fala por @lid separada da do telefone, e responder pelo
+// telefone fazia parte das mensagens ficar em "Aguardando mensagem" no celular
+// do cliente (problema conhecido do Baileys — issues #1739/#1767). O telefone
+// fica de reserva se o envio pelo @lid der erro. WHATSAPP_SEND_TO_LID=0 (variável
+// no Railway) volta a mandar só pelo telefone.
+function recipientJids(phone: string, lid?: string | null): string[] {
+  const byLid = lid?.endsWith("@lid") && process.env.WHATSAPP_SEND_TO_LID !== "0" ? lid : null;
+  return [byLid, jidFor(phone)].filter((jid): jid is string => Boolean(jid));
+}
+
+async function sendToFirstWorking(
+  line: WhatsAppLineId,
+  sock: WASocket,
+  jids: string[],
+  content: AnyMessageContent
+): Promise<{ jid: string; sent: WAMessage | undefined } | null> {
+  for (const [i, jid] of jids.entries()) {
+    try {
+      return { jid, sent: await sock.sendMessage(jid, content) };
+    } catch (err) {
+      const next = i < jids.length - 1 ? " — tentando pelo telefone" : "";
+      console.error(`Erro ao enviar via WhatsApp (${line}) para ${jid}${next}:`, err);
+    }
+  }
+  return null;
+}
+
+export async function sendWhatsAppText(
+  line: WhatsAppLineId,
+  phone: string,
+  text: string,
+  lid?: string | null
+): Promise<WaSendResult> {
   const r = runtimeFor(line);
   if (!r.socket || r.status !== "connected") return NOT_SENT;
 
-  const jid = jidFor(phone);
-  if (!jid) {
+  const jids = recipientJids(phone, lid);
+  if (!jids.length) {
     console.error(`Número inválido, não é possível enviar via WhatsApp (${line}):`, phone);
     return NOT_SENT;
   }
 
-  try {
-    const sent = await r.socket.sendMessage(jid, { text });
-    rememberSentMessage(sent);
-    return { sent: true, ref: refOf(sent, jid) };
-  } catch (err) {
-    console.error(`Erro ao enviar mensagem via WhatsApp (${line}):`, err);
-    return NOT_SENT;
-  }
+  const result = await sendToFirstWorking(line, r.socket, jids, { text });
+  if (!result) return NOT_SENT;
+  rememberSentMessage(line, result.sent);
+  return { sent: true, ref: refOf(result.sent, result.jid) };
 }
 
 // Versão só "saiu ou não" (campanhas não guardam a mensagem).
-export async function sendWhatsAppMessage(line: WhatsAppLineId, phone: string, text: string): Promise<boolean> {
-  return (await sendWhatsAppText(line, phone, text)).sent;
+export async function sendWhatsAppMessage(
+  line: WhatsAppLineId,
+  phone: string,
+  text: string,
+  lid?: string | null
+): Promise<boolean> {
+  return (await sendWhatsAppText(line, phone, text, lid)).sent;
 }
 
 export type OutboundMedia = {
@@ -474,42 +648,45 @@ export type OutboundMedia = {
   caption?: string;
 };
 
-export async function sendWhatsAppMedia(line: WhatsAppLineId, phone: string, media: OutboundMedia): Promise<WaSendResult> {
+export async function sendWhatsAppMedia(
+  line: WhatsAppLineId,
+  phone: string,
+  media: OutboundMedia,
+  lid?: string | null
+): Promise<WaSendResult> {
   const r = runtimeFor(line);
   if (!r.socket || r.status !== "connected") return NOT_SENT;
-  const jid = jidFor(phone);
-  if (!jid) {
+  const sock = r.socket;
+  const jids = recipientJids(phone, lid);
+  if (!jids.length) {
     console.error(`Número inválido, não é possível enviar mídia via WhatsApp (${line}):`, phone);
     return NOT_SENT;
   }
   const category = mediaCategoryFromMimetype(media.mimetype);
+  // WhatsApp não aceita legenda em mensagem de áudio — vai como texto separado
+  // logo em seguida (abaixo), senão o que o atendente digitou some sem avisar
+  // (o Message.body fica registrado, mas nunca chegaria no cliente).
+  const content: AnyMessageContent =
+    category === "image"
+      ? { image: media.buffer, mimetype: media.mimetype, caption: media.caption }
+      : category === "video"
+        ? { video: media.buffer, mimetype: media.mimetype, caption: media.caption }
+        : category === "audio"
+          ? { audio: media.buffer, mimetype: media.mimetype }
+          : { document: media.buffer, mimetype: media.mimetype, fileName: media.fileName ?? "arquivo", caption: media.caption };
 
   try {
-    let sent: WAMessage | undefined;
-    let caption: WAMessage | undefined;
-    if (category === "image") {
-      sent = await r.socket.sendMessage(jid, { image: media.buffer, mimetype: media.mimetype, caption: media.caption });
-    } else if (category === "video") {
-      sent = await r.socket.sendMessage(jid, { video: media.buffer, mimetype: media.mimetype, caption: media.caption });
-    } else if (category === "audio") {
-      // WhatsApp não aceita legenda em mensagem de áudio — manda como texto
-      // separado logo em seguida, senão o que o atendente digitou some sem
-      // avisar (o Message.body fica registrado, mas nunca chegaria no cliente).
-      sent = await r.socket.sendMessage(jid, { audio: media.buffer, mimetype: media.mimetype });
-      rememberSentMessage(sent); // já saiu, mesmo que a legenda falhe logo abaixo
-      if (media.caption) caption = await r.socket.sendMessage(jid, { text: media.caption });
-    } else {
-      sent = await r.socket.sendMessage(jid, {
-        document: media.buffer,
-        mimetype: media.mimetype,
-        fileName: media.fileName ?? "arquivo",
-        caption: media.caption,
-      });
-    }
-    rememberSentMessage(sent);
-    rememberSentMessage(caption);
+    const result = await sendToFirstWorking(line, sock, jids, content);
+    if (!result) return NOT_SENT;
+    rememberSentMessage(line, result.sent); // já saiu, mesmo que a legenda falhe logo abaixo
 
-    const ref = refOf(sent, jid);
+    let caption: WAMessage | undefined;
+    if (category === "audio" && media.caption) {
+      caption = await sock.sendMessage(result.jid, { text: media.caption });
+      rememberSentMessage(line, caption);
+    }
+
+    const ref = refOf(result.sent, result.jid);
     const captionId = caption?.key?.id;
     return { sent: true, ref: ref && captionId ? { ...ref, captionId } : ref };
   } catch (err) {
@@ -534,7 +711,8 @@ export async function deleteWhatsAppMessageForEveryone(
   const r = runtimeFor(line);
   if (!r.socket || r.status !== "connected") return false;
   try {
-    rememberSentMessage(await r.socket.sendMessage(remoteJid, { delete: ownKey(id, remoteJid) }));
+    rememberSentMessage(line, await r.socket.sendMessage(remoteJid, { delete: ownKey(id, remoteJid) }));
+    forgetSentMessage(id);
     return true;
   } catch (err) {
     console.error(`Erro ao apagar mensagem no WhatsApp (${line}):`, err);
@@ -553,7 +731,8 @@ export async function editWhatsAppMessage(
   const r = runtimeFor(line);
   if (!r.socket || r.status !== "connected") return false;
   try {
-    rememberSentMessage(await r.socket.sendMessage(remoteJid, { text, edit: ownKey(id, remoteJid) }));
+    rememberSentMessage(line, await r.socket.sendMessage(remoteJid, { text, edit: ownKey(id, remoteJid) }));
+    replaceSentContent(line, id, { conversation: text });
     return true;
   } catch (err) {
     console.error(`Erro ao editar mensagem no WhatsApp (${line}):`, err);
@@ -645,17 +824,30 @@ async function handleMessageUpdate(line: WhatsAppLineId, { key, update }: WAMess
   const id = key?.id;
   if (!id) return;
   const fromMe = Boolean(key.fromMe);
+  if (update.status === proto.WebMessageInfo.Status.ERROR) {
+    console.warn(`[wa-envio] (${line}) o WhatsApp recusou a mensagem ${id} para ${key.remoteJid}`);
+    return;
+  }
   await inFlight.get(`${line}:${id}`);
 
+  // Apagada/editada pelo celular pareado: a cópia guardada pro reenvio
+  // acompanha, igual quando o CRM apaga/edita (ver replaceSentContent).
   if (update.messageStubType === WAMessageStubType.REVOKE) {
+    if (fromMe) forgetSentMessage(id);
     await applyWhatsAppRevoke(line, id, fromMe);
     return;
   }
 
   const edited = update.message?.editedMessage?.message;
   if (edited) {
-    const text = textFromContent(normalizeMessageContent(edited));
-    if (text) await applyWhatsAppEdit(line, id, fromMe, text);
+    const content = normalizeMessageContent(edited);
+    const text = textFromContent(content);
+    if (!text) return;
+    // Só texto puro: numa legenda editada a cópia é a mídia inteira.
+    if (fromMe && (content?.conversation || content?.extendedTextMessage)) {
+      replaceSentContent(line, id, { conversation: text });
+    }
+    await applyWhatsAppEdit(line, id, fromMe, text);
   }
 }
 
@@ -748,9 +940,17 @@ async function handleIncomingMessage(line: WhatsAppLineId, msg: any, sock: WASoc
   const pushName: string | null = msg.pushName || null;
   // Guarda o par lid<->telefone (quando essa conversa usa @lid) pra permitir
   // reconhecer depois uma resposta mandada direto do celular pareado — ver
-  // resolvePhoneForOutboundReply.
+  // resolvePhoneForOutboundReply — e pra mandar as próximas pelo @lid (ver
+  // recipientJids). Numa conversa pelo telefone o WhatsApp às vezes manda o
+  // @lid junto (sender_lid); sem nenhum, lid = null apaga o guardado: o
+  // cliente passou a escrever pelo telefone (ou o número mudou de dono).
   const remoteJid: string | undefined = msg.key?.remoteJid;
-  const lid = remoteJid?.endsWith("@lid") ? remoteJid : null;
+  const senderLid: string | undefined = msg.key?.senderLid;
+  const lid = remoteJid?.endsWith("@lid")
+    ? remoteJid
+    : senderLid?.endsWith("@lid")
+      ? jidNormalizedUser(senderLid)
+      : null;
   const extras = {
     pushName,
     lid,
