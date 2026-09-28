@@ -17,6 +17,7 @@ import { Badge } from "@/components/ui/Badge";
 import { AutoRefresh } from "@/components/whatsapp/AutoRefresh";
 import { ReplyForm } from "@/components/whatsapp/ReplyForm";
 import { MessageActions } from "@/components/whatsapp/MessageActions";
+import { ChatImage } from "@/components/whatsapp/ChatImage";
 import { requireFeature } from "@/lib/session";
 import {
   connectWhatsAppAction,
@@ -447,11 +448,10 @@ export default async function WhatsappSuportePage({
                       }`}
                     >
                       {m.mediaUrl && m.mediaType === "image" && (
-                        // eslint-disable-next-line @next/next/no-img-element
-                        <img
+                        <ChatImage
                           src={`/api/whatsapp/media/${m.mediaUrl}`}
                           alt={m.mediaFileName ?? "Imagem"}
-                          className="rounded-lg max-w-full max-h-64 object-contain mb-1.5"
+                          fileName={m.mediaFileName}
                         />
                       )}
                       {m.mediaUrl && m.mediaType === "video" && (
