@@ -2,6 +2,7 @@
 
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
+import { cookies } from "next/headers";
 import { prisma } from "@/lib/prisma";
 import { requireFeature } from "@/lib/session";
 import {
@@ -22,7 +23,7 @@ import {
   type MessageActionResult,
 } from "@/lib/whatsapp/message-permissions";
 import { RATING_PROMPT, isRatingPrompt, stopWaitingForRating, removeAudioCaption } from "@/lib/whatsapp/inbound";
-import { firstInQueue } from "@/lib/whatsapp/queue";
+import { QUEUE_VIEW_COOKIE, firstInQueue, parseQueueView, type QueueView } from "@/lib/whatsapp/queue";
 import { logAudit } from "@/lib/audit";
 import type { SessionPayload } from "@/lib/auth";
 
@@ -64,6 +65,20 @@ export async function claimConversation(conversationId: string) {
 
   revalidatePath("/admin/whatsapp/suporte");
   redirect(`/admin/whatsapp/suporte?c=${conversationId}${lostRace ? "&aviso=ja-assumida" : ""}`);
+}
+
+// Visão da coluna Em atendimento pra CEO/Gerente: "mine" (só as dele, padrão)
+// ou "team" (supervisão). Guardada em cookie — ver QUEUE_VIEW_COOKIE. Pros
+// demais o cookie é ignorado (seesWholeTeam), então nem precisa checar aqui.
+export async function setSupportView(view: QueueView) {
+  await requireFeature("whatsapp_suporte");
+  (await cookies()).set(QUEUE_VIEW_COOKIE, parseQueueView(view), {
+    path: "/admin/whatsapp",
+    httpOnly: true,
+    sameSite: "lax",
+    maxAge: 60 * 60 * 24 * 365,
+  });
+  revalidatePath("/admin/whatsapp/suporte");
 }
 
 // Devolve a conversa pra fila (livre pra qualquer um assumir de novo). Só
@@ -246,7 +261,8 @@ export async function resolveConversation(conversationId: string) {
         : "avaliacao-numero-invalido";
   // Concluída sai da tela: abre a próxima da fila (com o id na URL, senão a
   // conversa aberta trocaria sozinha quando a lista reordena no auto-refresh).
-  const next = await firstInQueue(session);
+  const view = parseQueueView((await cookies()).get(QUEUE_VIEW_COOKIE)?.value);
+  const next = await firstInQueue(session, view);
   const query = [next && `c=${next}`, aviso && `aviso=${aviso}`].filter(Boolean).join("&");
   redirect(`/admin/whatsapp/suporte${query ? `?${query}` : ""}`);
 }

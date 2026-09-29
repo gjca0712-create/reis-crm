@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { cookies } from "next/headers";
 import { MessageCircle, ExternalLink, CheckCircle2, AlertTriangle, Ban } from "lucide-react";
 import { prisma } from "@/lib/prisma";
 import { formatDateTime, formatPhone, whatsappLink } from "@/lib/format";
@@ -6,7 +7,13 @@ import { getAllWhatsAppStates, ensureAllWhatsAppStarted } from "@/lib/whatsapp/c
 import { whatsappLineLabel } from "@/lib/whatsapp/lines";
 import { qrToDataUrl } from "@/lib/whatsapp/qr";
 import { canManageQueue as managesQueue, sentMessagePermissions } from "@/lib/whatsapp/message-permissions";
-import { groupByQueueSection, queueListWhere } from "@/lib/whatsapp/queue";
+import {
+  QUEUE_VIEW_COOKIE,
+  groupByQueueSection,
+  parseQueueView,
+  queueListWhere,
+  seesWholeTeam,
+} from "@/lib/whatsapp/queue";
 import { Card } from "@/components/ui/Card";
 import { Badge } from "@/components/ui/Badge";
 import { AutoRefresh } from "@/components/whatsapp/AutoRefresh";
@@ -25,6 +32,7 @@ import {
   releaseConversation,
   editSupportMessage,
   deleteSupportMessage,
+  setSupportView,
 } from "./actions";
 
 const AVISOS: Record<string, string> = {
@@ -50,9 +58,12 @@ export default async function WhatsappSuportePage({
   searchParams: Promise<{ c?: string; aviso?: string }>;
 }) {
   const session = await requireFeature("whatsapp_suporte");
-  // CEO e Gerente supervisionam a fila inteira; os demais só veem a própria
-  // fila — em espera + as que estão com eles (ver lib/whatsapp/queue.ts).
+  // Todo mundo vê a própria fila — em espera + as que estão com a pessoa. CEO
+  // e Gerente ainda podem abrir/mexer em qualquer conversa e trocar a coluna
+  // Em atendimento pra visão "Equipe" (ver lib/whatsapp/queue.ts).
   const canManageQueue = managesQueue(session.role);
+  const view = parseQueueView((await cookies()).get(QUEUE_VIEW_COOKIE)?.value);
+  const teamView = seesWholeTeam(session, view);
 
   const params = await searchParams;
 
@@ -70,7 +81,7 @@ export default async function WhatsappSuportePage({
   const aviso = params.aviso ? (AVISOS[params.aviso] ?? null) : null;
 
   const conversations = await prisma.conversation.findMany({
-    where: queueListWhere(session),
+    where: queueListWhere(session, view),
     orderBy: { lastMessageAt: "desc" },
     include: {
       customer: { select: { id: true, name: true, phone: true, bairro: true } },
@@ -84,7 +95,7 @@ export default async function WhatsappSuportePage({
     },
   });
 
-  const sections = groupByQueueSection(conversations, session);
+  const sections = groupByQueueSection(conversations, session, view);
   // Sem ?c=, abre a primeira da fila — nunca uma finalizada (igual ao
   // firstInQueue, pra onde vai quem acabou de concluir um atendimento).
   const activeId =
@@ -114,12 +125,12 @@ export default async function WhatsappSuportePage({
         <div>
           <h1 className="text-xl font-semibold text-ink-primary">WhatsApp Suporte</h1>
           <p className="text-sm text-ink-muted mt-0.5">
-            {canManageQueue
-              ? "Conversas de atendimento com clientes · duas linhas"
+            {teamView
+              ? "Visão da equipe: todas as conversas · duas linhas"
               : "Sua fila: clientes em espera e os que estão com você · duas linhas"}
           </p>
         </div>
-        <QueueLegend showResolved={canManageQueue} />
+        <QueueLegend showResolved={teamView} />
       </div>
 
       {aviso && (
@@ -205,7 +216,32 @@ export default async function WhatsappSuportePage({
           lista ocupa a própria coluna do grid. */}
       <div className="grid grid-cols-1 lg:grid-cols-[280px_minmax(0,1fr)] xl:grid-cols-[250px_250px_minmax(0,1fr)] 2xl:grid-cols-[290px_290px_minmax(0,1fr)] gap-4 lg:h-[calc(100vh-340px)] lg:min-h-[480px]">
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-1 lg:grid-rows-2 gap-4 min-h-0 xl:contents">
-          <QueueColumns sections={sections} activeId={activeId} userId={session.userId} />
+          <QueueColumns
+            sections={sections}
+            activeId={activeId}
+            userId={session.userId}
+            currentToolbar={
+              canManageQueue ? (
+                <div className="flex gap-1 px-3 py-2 border-b border-border">
+                  {(["mine", "team"] as const).map((v) => (
+                    <form key={v} action={setSupportView.bind(null, v)} className="flex-1">
+                      <button
+                        type="submit"
+                        aria-pressed={view === v}
+                        className={`w-full rounded-md px-2 py-1 text-xs font-medium transition-colors ${
+                          view === v
+                            ? "bg-gold-400 text-page"
+                            : "bg-surface-raised text-ink-secondary hover:text-ink-primary"
+                        }`}
+                      >
+                        {v === "mine" ? "Meus" : "Equipe"}
+                      </button>
+                    </form>
+                  ))}
+                </div>
+              ) : undefined
+            }
+          />
         </div>
 
         <Card className="p-0 overflow-hidden flex flex-col min-h-0 h-[75vh] lg:h-auto">

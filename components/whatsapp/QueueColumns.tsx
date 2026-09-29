@@ -57,17 +57,21 @@ export type QueueConversation = {
 type Sections<T> = { section: QueueSection; conversations: T[] }[];
 
 // As duas colunas da fila, antes do chat: "Em espera" (ninguém assumiu) e "Em
-// atendimento" (com você; CEO/Gerente veem também as da equipe e as
-// finalizadas, recolhidas). Devolve os dois Cards soltos — quem posiciona é o
+// atendimento" (as que estão com quem está logado; na visão "Equipe" de
+// CEO/Gerente, também as dos colegas e as finalizadas, recolhidas).
+// currentToolbar: faixa logo abaixo do título de Em atendimento (a chave
+// Meus/Equipe da página). Devolve os dois Cards soltos — quem posiciona é o
 // grid da página.
 export function QueueColumns<T extends QueueConversation>({
   sections,
   activeId,
   userId,
+  currentToolbar,
 }: {
   sections: Sections<T>;
   activeId: string | undefined;
   userId: string;
+  currentToolbar?: ReactNode;
 }) {
   const waiting = sections.find((s) => s.section === "waiting")?.conversations ?? [];
   const current = sections.filter((s) => s.section !== "waiting");
@@ -85,7 +89,7 @@ export function QueueColumns<T extends QueueConversation>({
         {rowsOrEmpty(waiting, QUEUE_SECTION_EMPTY.waiting)}
       </QueueColumn>
 
-      <QueueColumn title="Em atendimento" count={inProgress}>
+      <QueueColumn title="Em atendimento" count={inProgress} toolbar={currentToolbar}>
         {onlyMine
           ? rowsOrEmpty(current[0].conversations, QUEUE_SECTION_EMPTY.mine)
           : current.map(({ section, conversations: rows }) => {
@@ -133,11 +137,13 @@ function QueueColumn({
   title,
   count,
   alert = false,
+  toolbar,
   children,
 }: {
   title: string;
   count: number;
   alert?: boolean;
+  toolbar?: ReactNode;
   children: ReactNode;
 }) {
   return (
@@ -152,6 +158,7 @@ function QueueColumn({
           {count}
         </span>
       </div>
+      {toolbar}
       <div className="overflow-y-auto flex-1 min-h-0">{children}</div>
     </Card>
   );
