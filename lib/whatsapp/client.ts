@@ -588,9 +588,63 @@ export const WHATSAPP_DELETE_WINDOW_MS = 2 * 24 * 60 * 60_000;
 // do cliente (problema conhecido do Baileys — issues #1739/#1767). O telefone
 // fica de reserva se o envio pelo @lid der erro. WHATSAPP_SEND_TO_LID=0 (variável
 // no Railway) volta a mandar só pelo telefone.
-function recipientJids(phone: string, lid?: string | null): string[] {
+async function recipientJids(sock: WASocket, phone: string, lid?: string | null): Promise<string[]> {
   const byLid = lid?.endsWith("@lid") && process.env.WHATSAPP_SEND_TO_LID !== "0" ? lid : null;
-  return [byLid, jidFor(phone)].filter((jid): jid is string => Boolean(jid));
+  return [byLid, await phoneJid(sock, phone)].filter((jid): jid is string => Boolean(jid));
+}
+
+// Celular salvo com o nono dígito: o WhatsApp registra boa parte das contas
+// SEM ele (55 + DDD + 8 dígitos), e mandar pro endereço com o 9 "sai" sem erro
+// nenhum e nunca chega. Quem escreveu pra gente já tem o telefone na forma do
+// WhatsApp (vem da própria mensagem); o problema é o cadastrado à mão — quando
+// o CRM inicia a conversa, ou numa campanha. Pergunta ao WhatsApp o endereço
+// certo, uma vez por número (cache de 24h). Sem resposta, manda como sempre mandou.
+const JID_LOOKUP_TTL_MS = 24 * 60 * 60_000;
+const MAX_JID_LOOKUPS_CACHED = 5000;
+const jidLookups = new Map<string, { jid: string; at: number }>();
+
+async function phoneJid(sock: WASocket, phone: string): Promise<string | null> {
+  const jid = jidFor(phone);
+  if (!jid || onlyDigits(phone).length !== 11) return jid;
+  const found = await lookupWhatsAppJid(sock, jid);
+  return found || jid;
+}
+
+// Endereço de verdade do número no WhatsApp: string = tem WhatsApp, null = não
+// tem, undefined = não deu pra perguntar (timeout, conexão caindo).
+async function lookupWhatsAppJid(sock: WASocket, jid: string): Promise<string | null | undefined> {
+  const cached = jidLookups.get(jid);
+  if (cached && Date.now() - cached.at < JID_LOOKUP_TTL_MS) return cached.jid;
+  try {
+    const results = await Promise.race([
+      sock.onWhatsApp(jid),
+      new Promise<undefined>((resolve) => setTimeout(() => resolve(undefined), 8000)),
+    ]);
+    if (!results) return undefined;
+    const match = results.find((r) => r.exists && r.jid);
+    if (!match) return null;
+    const found = jidNormalizedUser(match.jid);
+    if (jidLookups.size >= MAX_JID_LOOKUPS_CACHED) jidLookups.delete(jidLookups.keys().next().value!);
+    jidLookups.set(jid, { jid: found, at: Date.now() });
+    return found;
+  } catch (err) {
+    console.error("Erro ao consultar número no WhatsApp:", err);
+    return undefined;
+  }
+}
+
+// Antes de iniciar uma conversa pelo CRM: número que não tem WhatsApp não
+// recebe nada — e insistir em mandar pra número inexistente é sinal de disparo
+// em massa pro WhatsApp. "unknown" = não deu pra conferir (segue sem travar).
+export type WhatsAppNumberCheck = "ok" | "not-on-whatsapp" | "invalid" | "offline" | "unknown";
+
+export async function checkWhatsAppNumber(line: WhatsAppLineId, phone: string): Promise<WhatsAppNumberCheck> {
+  const r = runtimeFor(line);
+  if (!r.socket || r.status !== "connected") return "offline";
+  const jid = jidFor(phone);
+  if (!jid) return "invalid";
+  const found = await lookupWhatsAppJid(r.socket, jid);
+  return found ? "ok" : found === null ? "not-on-whatsapp" : "unknown";
 }
 
 async function sendToFirstWorking(
@@ -619,7 +673,7 @@ export async function sendWhatsAppText(
   const r = runtimeFor(line);
   if (!r.socket || r.status !== "connected") return NOT_SENT;
 
-  const jids = recipientJids(phone, lid);
+  const jids = await recipientJids(r.socket, phone, lid);
   if (!jids.length) {
     console.error(`Número inválido, não é possível enviar via WhatsApp (${line}):`, phone);
     return NOT_SENT;
@@ -657,7 +711,7 @@ export async function sendWhatsAppMedia(
   const r = runtimeFor(line);
   if (!r.socket || r.status !== "connected") return NOT_SENT;
   const sock = r.socket;
-  const jids = recipientJids(phone, lid);
+  const jids = await recipientJids(sock, phone, lid);
   if (!jids.length) {
     console.error(`Número inválido, não é possível enviar mídia via WhatsApp (${line}):`, phone);
     return NOT_SENT;

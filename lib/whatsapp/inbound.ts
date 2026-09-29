@@ -1,5 +1,5 @@
 import { prisma } from "@/lib/prisma";
-import { normalizePhone } from "@/lib/phone";
+import { normalizePhone, phoneVariants } from "@/lib/phone";
 import { formatPhone } from "@/lib/format";
 import type { WhatsAppLineId } from "./lines";
 import type { MediaCategory } from "./media";
@@ -50,19 +50,48 @@ export function normalizeIncomingPhone(raw: string): string | null {
 // achou, então cria" ao mesmo tempo e cadastrarem o mesmo cliente/conversa
 // duas vezes. `phone` não tem constraint de unicidade no banco, então isso
 // não é pego pelo Postgres — precisa ser evitado aqui.
-const phoneLocks = new Map<string, Promise<unknown>>();
+// Também usado ao iniciar uma conversa pelo CRM (start-conversation.ts): a resposta
+// do cliente espera a conversa nova ficar gravada, senão abriria outra.
+// Chave igual pro número com e sem o nono dígito (phoneVariants). Em
+// globalThis porque o socket pode ter sido ligado pelo instrumentation.ts,
+// que tem a própria cópia deste módulo — sem isso, cada lado teria sua trava.
+const globalForInbound = globalThis as unknown as { __waPhoneLocks?: Map<string, Promise<unknown>> };
+const phoneLocks = (globalForInbound.__waPhoneLocks ??= new Map<string, Promise<unknown>>());
 
-async function withPhoneLock<T>(phone: string, fn: () => Promise<T>): Promise<T> {
-  const prior = phoneLocks.get(phone) ?? Promise.resolve();
+export async function withPhoneLock<T>(phone: string, fn: () => Promise<T>): Promise<T> {
+  const key = phoneVariants(phone).sort()[0];
+  const prior = phoneLocks.get(key) ?? Promise.resolve();
   const result = prior.then(fn, fn);
   phoneLocks.set(
-    phone,
+    key,
     result.then(
       () => undefined,
       () => undefined
     )
   );
   return result;
+}
+
+// Cadastro de um telefone, com ou sem o nono dígito (ver phoneVariants).
+// Havendo os dois (duplicado de antes disso), fica o do número exato.
+export async function findCustomerByPhone(phone: string) {
+  const found = await prisma.customer.findMany({
+    where: { phone: { in: phoneVariants(phone) } },
+    orderBy: { createdAt: "asc" },
+  });
+  return found.find((c) => c.phone === phone) ?? found[0] ?? null;
+}
+
+// Conversa mais recente NESSA linha de qualquer cadastro desse telefone — cada
+// número tem seu próprio fio; responder por outro número confundiria o cliente
+// (remetente diferente). Pelo telefone e não pelo cadastro: com um duplicado
+// (com e sem o nono dígito), fica o que tem a conversa.
+export function latestConversationOnLine(phone: string, line: WhatsAppLineId) {
+  return prisma.conversation.findFirst({
+    where: { line, customer: { phone: { in: phoneVariants(phone) } } },
+    orderBy: { lastMessageAt: "desc" },
+    include: { customer: true },
+  });
 }
 
 // Telefone de um cliente a partir do @lid que o WhatsApp usa pra essa conversa
@@ -113,7 +142,8 @@ async function processInboundWhatsAppMessageLocked(
 ): Promise<void> {
   if (await alreadyStored(waMessageId, "IN")) return;
 
-  let customer = await prisma.customer.findFirst({ where: { phone } });
+  const conversation = await latestConversationOnLine(phone, line);
+  let customer = conversation?.customer ?? (await findCustomerByPhone(phone));
   if (!customer) {
     // Igual ao WhatsApp Web: usa o nome que a própria pessoa colocou no perfil
     // dela (pushName) quando o número ainda não está "salvo" (não temos esse
@@ -137,13 +167,6 @@ async function processInboundWhatsAppMessageLocked(
     // respostas pra outra conta (ver recipientJids em client.ts).
     customer = await prisma.customer.update({ where: { id: customer.id }, data: { whatsappLid: lid } });
   }
-
-  // Conversa mais recente do cliente NESSA linha — cada número tem seu próprio
-  // fio; responder por outro número confundiria o cliente (remetente diferente).
-  const conversation = await prisma.conversation.findFirst({
-    where: { customerId: customer.id, line },
-    orderBy: { lastMessageAt: "desc" },
-  });
 
   // Se a conversa mais recente estava aguardando avaliação, tenta interpretar a resposta como nota.
   if (conversation?.ratingRequested) {
@@ -213,13 +236,7 @@ async function processOutboundFromPhoneLocked(
 ): Promise<void> {
   if (await alreadyStored(waMessageId, "OUT")) return;
 
-  const customer = await prisma.customer.findFirst({ where: { phone } });
-  if (!customer) return;
-
-  const conversation = await prisma.conversation.findFirst({
-    where: { customerId: customer.id, line },
-    orderBy: { lastMessageAt: "desc" },
-  });
+  const conversation = await latestConversationOnLine(phone, line);
   if (!conversation) return;
 
   await prisma.$transaction([

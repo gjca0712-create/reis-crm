@@ -21,6 +21,7 @@ import { ReplyForm } from "@/components/whatsapp/ReplyForm";
 import { MessageActions } from "@/components/whatsapp/MessageActions";
 import { ChatImage } from "@/components/whatsapp/ChatImage";
 import { QueueColumns, QueueLegend } from "@/components/whatsapp/QueueColumns";
+import { NewConversationDialog } from "@/components/whatsapp/NewConversationDialog";
 import { requireFeature } from "@/lib/session";
 import {
   connectWhatsAppAction,
@@ -55,7 +56,7 @@ const MEDIA_LABELS: Record<string, string> = { image: "foto", video: "vídeo", a
 export default async function WhatsappSuportePage({
   searchParams,
 }: {
-  searchParams: Promise<{ c?: string; aviso?: string }>;
+  searchParams: Promise<{ c?: string; aviso?: string; novo?: string }>;
 }) {
   const session = await requireFeature("whatsapp_suporte");
   // Todo mundo vê a própria fila — em espera + as que estão com a pessoa. CEO
@@ -79,6 +80,12 @@ export default async function WhatsappSuportePage({
   const anyPairing = waStates.some((s) => s.status === "qr" || s.status === "connecting");
 
   const aviso = params.aviso ? (AVISOS[params.aviso] ?? null) : null;
+
+  // "Conversar pelo CRM" da ficha do cliente chega com ?novo=<id>: abre a
+  // Nova conversa já com ele escolhido.
+  const newChatCustomer = params.novo
+    ? await prisma.customer.findUnique({ where: { id: params.novo }, select: { id: true, name: true, phone: true } })
+    : null;
 
   const conversations = await prisma.conversation.findMany({
     where: queueListWhere(session, view),
@@ -130,7 +137,18 @@ export default async function WhatsappSuportePage({
               : "Sua fila: clientes em espera e os que estão com você · duas linhas"}
           </p>
         </div>
-        <QueueLegend showResolved={teamView} />
+        <div className="flex flex-wrap items-center gap-x-5 gap-y-2">
+          <QueueLegend showResolved={teamView} />
+          <NewConversationDialog
+            lines={waStates.map((s) => ({
+              id: s.line,
+              label: whatsappLineLabel(s.line),
+              connected: s.status === "connected",
+            }))}
+            initialCustomer={newChatCustomer}
+            autoOpen={Boolean(newChatCustomer)}
+          />
+        </div>
       </div>
 
       {aviso && (

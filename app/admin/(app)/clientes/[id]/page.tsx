@@ -1,17 +1,31 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { MessageCircle, Pencil, MapPin, Mail, IdCard, Gift, Handshake, Cake, HardHat, type LucideIcon } from "lucide-react";
+import {
+  MessageCircle,
+  MessageSquarePlus,
+  Pencil,
+  MapPin,
+  Mail,
+  IdCard,
+  Gift,
+  Handshake,
+  Cake,
+  HardHat,
+  type LucideIcon,
+} from "lucide-react";
 import { prisma } from "@/lib/prisma";
 import { formatCurrency, formatDate, formatBirthday, formatPhone, whatsappLink } from "@/lib/format";
 import { recencyBucket, daysUntilBirthday, RECENCY_LABELS, RECENCY_STATUS } from "@/lib/calculations";
 import { PROFISSAO_LABELS, FASE_OBRA_LABELS } from "@/lib/constants";
 import { Card } from "@/components/ui/Card";
 import { Badge } from "@/components/ui/Badge";
-import { requireFeature } from "@/lib/session";
+import { requireFeature, getSessionFeatures } from "@/lib/session";
+import { canAccess } from "@/lib/permissions";
 
 export default async function ClienteDetailPage({ params }: { params: Promise<{ id: string }> }) {
-  await requireFeature("clientes");
+  const session = await requireFeature("clientes");
   const { id } = await params;
+  const canChat = canAccess(await getSessionFeatures(session), "whatsapp_suporte");
 
   const customer = await prisma.customer.findUnique({
     where: { id },
@@ -55,6 +69,16 @@ export default async function ClienteDetailPage({ params }: { params: Promise<{ 
           >
             <Pencil className="w-4 h-4" /> Editar
           </Link>
+          {/* Pelas linhas da loja, com a conversa registrada no Suporte — o
+              "Abrir WhatsApp" ao lado abre o WhatsApp de quem está usando. */}
+          {canChat && (
+            <Link
+              href={`/admin/whatsapp/suporte?novo=${customer.id}`}
+              className="inline-flex items-center gap-2 rounded-lg bg-gold-400 text-page px-4 py-2.5 text-sm font-semibold hover:bg-gold-300 transition-colors"
+            >
+              <MessageSquarePlus className="w-4 h-4" /> Conversar pelo CRM
+            </Link>
+          )}
           <a
             href={whatsappLink(customer.phone, waMessage)}
             target="_blank"

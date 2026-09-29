@@ -16,6 +16,12 @@ import {
 } from "@/lib/whatsapp/client";
 import { sendWhatsAppMessage, sendWhatsAppMedia } from "@/lib/whatsapp/send";
 import { isWhatsAppLineId, toWhatsAppLineId } from "@/lib/whatsapp/lines";
+import {
+  searchCustomersForChat,
+  startConversationAs,
+  type ChatCustomerOption,
+  type StartConversationResult,
+} from "@/lib/whatsapp/start-conversation";
 import { saveMediaBuffer, mediaCategoryFromMimetype } from "@/lib/whatsapp/media";
 import {
   canManageQueue,
@@ -202,6 +208,29 @@ export async function sendSupportReply(conversationId: string, formData: FormDat
   // já está conectada, achando que é isso que está impedindo o envio.
   const aviso = sent ? null : isSendablePhone(phone) ? "nao-entregue" : "numero-invalido";
   redirect(`/admin/whatsapp/suporte?c=${conversationId}${aviso ? `&aviso=${aviso}` : ""}`);
+}
+
+// --- Iniciar conversa pelo CRM (lib/whatsapp/start-conversation.ts) -----------
+
+export async function searchChatCustomers(query: string): Promise<ChatCustomerOption[]> {
+  await requireFeature("whatsapp_suporte");
+  return searchCustomersForChat(query);
+}
+
+export async function startConversation(
+  _prev: StartConversationResult,
+  formData: FormData
+): Promise<StartConversationResult> {
+  const session = await requireFeature("whatsapp_suporte");
+  const outcome = await startConversationAs(session.userId, {
+    customerId: String(formData.get("customerId") || "") || undefined,
+    phone: String(formData.get("phone") || ""),
+    name: String(formData.get("name") || ""),
+    line: String(formData.get("line") || ""),
+    body: String(formData.get("body") || ""),
+  });
+  if (outcome && "conversationId" in outcome) revalidatePath("/admin/whatsapp/suporte");
+  return outcome;
 }
 
 // Pedido de avaliação DESLIGADO (2026-09-28): a mesma mensagem automática pra

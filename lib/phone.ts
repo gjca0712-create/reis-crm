@@ -12,3 +12,15 @@ export function normalizePhone(raw: string | null | undefined): string {
   }
   return digits;
 }
+
+// O mesmo celular com e sem o nono dígito. O WhatsApp registra boa parte das
+// contas sem ele (55 + DDD + 8 dígitos — é o que chega numa mensagem recebida),
+// enquanto no cadastro manual quase sempre é digitado com o 9. Sem casar as
+// duas formas, o cliente cadastrado à mão que responde uma conversa iniciada
+// pelo CRM viraria um contato duplicado. Fixo (10 dígitos começando em 2-5)
+// não tem variação.
+export function phoneVariants(phone: string): string[] {
+  if (phone.length === 11 && phone[2] === "9") return [phone, phone.slice(0, 2) + phone.slice(3)];
+  if (phone.length === 10 && /[6-9]/.test(phone[2])) return [phone, `${phone.slice(0, 2)}9${phone.slice(2)}`];
+  return [phone];
+}
