@@ -1,23 +1,19 @@
 import Link from "next/link";
-import { MessageCircle, ExternalLink, CheckCircle2, AlertTriangle, Ban, ChevronDown } from "lucide-react";
+import { MessageCircle, ExternalLink, CheckCircle2, AlertTriangle, Ban } from "lucide-react";
 import { prisma } from "@/lib/prisma";
 import { formatDateTime, formatPhone, whatsappLink } from "@/lib/format";
 import { getAllWhatsAppStates, ensureAllWhatsAppStarted } from "@/lib/whatsapp/client";
 import { whatsappLineLabel } from "@/lib/whatsapp/lines";
 import { qrToDataUrl } from "@/lib/whatsapp/qr";
 import { canManageQueue as managesQueue, sentMessagePermissions } from "@/lib/whatsapp/message-permissions";
-import {
-  QUEUE_SECTION_EMPTY,
-  QUEUE_SECTION_LABELS,
-  groupByQueueSection,
-  queueListWhere,
-} from "@/lib/whatsapp/queue";
+import { groupByQueueSection, queueListWhere } from "@/lib/whatsapp/queue";
 import { Card } from "@/components/ui/Card";
 import { Badge } from "@/components/ui/Badge";
 import { AutoRefresh } from "@/components/whatsapp/AutoRefresh";
 import { ReplyForm } from "@/components/whatsapp/ReplyForm";
 import { MessageActions } from "@/components/whatsapp/MessageActions";
 import { ChatImage } from "@/components/whatsapp/ChatImage";
+import { QueueColumns, QueueLegend } from "@/components/whatsapp/QueueColumns";
 import { requireFeature } from "@/lib/session";
 import {
   connectWhatsAppAction,
@@ -30,25 +26,6 @@ import {
   editSupportMessage,
   deleteSupportMessage,
 } from "./actions";
-
-// Fundo bem fraco em cada conversa da lista, só pra identificar o estado de
-// relance (o texto continua legível normal): vermelho = cliente esperando
-// resposta, amarelo = em atendimento (já respondida, ainda aberta), verde =
-// finalizada. Classes completas aqui pro Tailwind enxergar. Vermelho rosado e
-// amarelo limão de propósito (não os status-critical/warning): sobre o fundo
-// marrom escuro, o vermelho alaranjado e o amarelo dourado viram dois tons de
-// marrom quase iguais.
-const ROW_TONES = {
-  unanswered: {
-    idle: "bg-[rgba(244,63,94,0.14)] hover:bg-[rgba(244,63,94,0.2)]",
-    active: "bg-[rgba(244,63,94,0.26)]",
-  },
-  inProgress: {
-    idle: "bg-[rgba(250,204,21,0.09)] hover:bg-[rgba(250,204,21,0.14)]",
-    active: "bg-[rgba(250,204,21,0.18)]",
-  },
-  resolved: { idle: "bg-status-good/10 hover:bg-status-good/15", active: "bg-status-good/20" },
-} as const;
 
 const AVISOS: Record<string, string> = {
   "nao-entregue":
@@ -66,11 +43,6 @@ const AVISOS: Record<string, string> = {
 
 // Anexo de uma mensagem apagada: a mídia sai da conversa, fica só a menção.
 const MEDIA_LABELS: Record<string, string> = { image: "foto", video: "vídeo", audio: "áudio", document: "documento" };
-
-function rowTone(status: string, unanswered: boolean) {
-  if (status === "RESOLVED") return ROW_TONES.resolved;
-  return unanswered ? ROW_TONES.unanswered : ROW_TONES.inProgress;
-}
 
 export default async function WhatsappSuportePage({
   searchParams,
@@ -136,54 +108,18 @@ export default async function WhatsappSuportePage({
       ? null
       : activeRaw;
 
-  // Uma linha da lista: cor pelo estado (ver ROW_TONES) e negrito quando o
-  // cliente falou por último (ainda sem resposta), igual o próprio WhatsApp.
-  const renderRow = (c: (typeof conversations)[number]) => {
-    const unanswered = c.messages[0]?.direction === "IN";
-    const tone = rowTone(c.status, unanswered);
-    const isActive = c.id === activeId;
-    return (
-      <Link
-        key={c.id}
-        href={`/admin/whatsapp/suporte?c=${c.id}`}
-        className={`flex items-start gap-3 px-4 py-3 border-b border-border/60 transition-colors ${
-          isActive ? `${tone.active} shadow-[inset_3px_0_0_0_#D4AF37]` : tone.idle
-        }`}
-      >
-        <div className="w-9 h-9 rounded-full bg-gold-400/15 border border-gold-700/40 flex items-center justify-center text-xs font-semibold text-gold-400 shrink-0">
-          {c.customer.name.slice(0, 1).toUpperCase()}
-        </div>
-        <div className="min-w-0 flex-1">
-          <span
-            className={`block text-sm text-ink-primary truncate ${unanswered ? "font-semibold" : "font-normal"}`}
-          >
-            {c.customer.name}
-          </span>
-          <div
-            className={`text-xs truncate ${unanswered ? "text-ink-primary font-semibold" : "text-ink-muted font-normal"}`}
-          >
-            {formatPhone(c.customer.phone)}
-            <span className={unanswered ? "" : "text-ink-secondary"}> · {whatsappLineLabel(c.line)}</span>
-            {c.rating && <span className="text-gold-400"> · {c.rating.score}★</span>}
-            {/* "Com você" já é o título da seção; aqui só quando é de um colega. */}
-            {c.assignedTo && c.assignedTo.id !== session.userId && (
-              <span className="text-gold-400"> · Com {c.assignedTo.name}</span>
-            )}
-          </div>
-        </div>
-      </Link>
-    );
-  };
-
   return (
     <div className="space-y-4">
-      <div>
-        <h1 className="text-xl font-semibold text-ink-primary">WhatsApp Suporte</h1>
-        <p className="text-sm text-ink-muted mt-0.5">
-          {canManageQueue
-            ? "Conversas de atendimento com clientes · duas linhas"
-            : "Sua fila: clientes em espera e os que estão com você · duas linhas"}
-        </p>
+      <div className="flex flex-wrap items-end justify-between gap-x-6 gap-y-2">
+        <div>
+          <h1 className="text-xl font-semibold text-ink-primary">WhatsApp Suporte</h1>
+          <p className="text-sm text-ink-muted mt-0.5">
+            {canManageQueue
+              ? "Conversas de atendimento com clientes · duas linhas"
+              : "Sua fila: clientes em espera e os que estão com você · duas linhas"}
+          </p>
+        </div>
+        <QueueLegend showResolved={canManageQueue} />
       </div>
 
       {aviso && (
@@ -263,75 +199,16 @@ export default async function WhatsappSuportePage({
         <AutoRefresh intervalMs={anyPairing ? 2500 : 12000} />
       </Card>
 
-      <div className="grid grid-cols-1 lg:grid-cols-[320px_1fr] gap-4 h-[calc(100vh-360px)] min-h-[420px]">
-        <Card className="p-0 overflow-hidden flex flex-col">
-          <div className="flex flex-wrap gap-x-4 gap-y-1 px-4 py-2 border-b border-border text-[11px] text-ink-muted">
-            <span className="inline-flex items-center gap-1.5">
-              <span className="w-2.5 h-2.5 rounded-sm bg-[rgba(244,63,94,0.5)]" /> Sem resposta
-            </span>
-            <span className="inline-flex items-center gap-1.5">
-              <span className="w-2.5 h-2.5 rounded-sm bg-[rgba(250,204,21,0.45)]" /> Em atendimento
-            </span>
-            {canManageQueue && (
-              <span className="inline-flex items-center gap-1.5">
-                <span className="w-2.5 h-2.5 rounded-sm bg-status-good/40" /> Finalizada
-              </span>
-            )}
-          </div>
-          <div className="overflow-y-auto flex-1">
-            {sections.map(({ section, conversations: rows }) => {
-              const label = QUEUE_SECTION_LABELS[section];
-              const empty = QUEUE_SECTION_EMPTY[section];
-              if (rows.length === 0 && !empty) return null;
-              const count = (
-                <span
-                  className={
-                    section === "waiting" && rows.length > 0
-                      ? "rounded-full bg-[rgba(244,63,94,0.3)] px-1.5 text-ink-primary"
-                      : "text-ink-muted"
-                  }
-                >
-                  {rows.length}
-                </span>
-              );
-              const body =
-                rows.length > 0 ? (
-                  rows.map(renderRow)
-                ) : (
-                  <p className="px-4 py-3 text-xs text-ink-muted">{empty}</p>
-                );
+      {/* Duas colunas da fila (Em espera | Em atendimento) e o chat ao lado. Em
+          tela média (lg) não cabem três colunas ao lado da barra lateral: as duas
+          listas ficam empilhadas; do xl pra cima o wrapper vira "contents" e cada
+          lista ocupa a própria coluna do grid. */}
+      <div className="grid grid-cols-1 lg:grid-cols-[280px_minmax(0,1fr)] xl:grid-cols-[250px_250px_minmax(0,1fr)] 2xl:grid-cols-[290px_290px_minmax(0,1fr)] gap-4 lg:h-[calc(100vh-340px)] lg:min-h-[480px]">
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-1 lg:grid-rows-2 gap-4 min-h-0 xl:contents">
+          <QueueColumns sections={sections} activeId={activeId} userId={session.userId} />
+        </div>
 
-              // Finalizadas (só CEO/Gerente) começam recolhidas: é histórico,
-              // e empurraria a fila pra baixo. Abre sozinha se a conversa
-              // aberta à direita está nela.
-              if (section === "resolved") {
-                return (
-                  <details key={section} className="group" open={rows.some((c) => c.id === activeId)}>
-                    <summary className="sticky top-0 z-10 flex cursor-pointer list-none items-center justify-between gap-2 border-b border-border bg-surface-raised px-4 py-1.5 text-[11px] font-semibold uppercase tracking-wide text-ink-secondary [&::-webkit-details-marker]:hidden">
-                      <span className="inline-flex items-center gap-1">
-                        <ChevronDown className="w-3.5 h-3.5 -rotate-90 transition-transform group-open:rotate-0" />
-                        {label}
-                      </span>
-                      {count}
-                    </summary>
-                    {body}
-                  </details>
-                );
-              }
-              return (
-                <section key={section}>
-                  <div className="sticky top-0 z-10 flex items-center justify-between gap-2 border-b border-border bg-surface-raised px-4 py-1.5 text-[11px] font-semibold uppercase tracking-wide text-ink-secondary">
-                    <span>{label}</span>
-                    {count}
-                  </div>
-                  {body}
-                </section>
-              );
-            })}
-          </div>
-        </Card>
-
-        <Card className="p-0 overflow-hidden flex flex-col">
+        <Card className="p-0 overflow-hidden flex flex-col min-h-0 h-[75vh] lg:h-auto">
           {active ? (
             <>
               <div className="flex items-center justify-between px-5 py-3.5 border-b border-border flex-wrap gap-2">
