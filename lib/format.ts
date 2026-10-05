@@ -33,6 +33,46 @@ export function formatDateTime(date: Date | string) {
   }).format(new Date(date));
 }
 
+// --- Hora das mensagens (telas de conversa, estilo WhatsApp) ---
+
+const timeFormat = new Intl.DateTimeFormat("pt-BR", { hour: "2-digit", minute: "2-digit", timeZone: STORE_TIMEZONE });
+// en-CA dá AAAA-MM-DD: chave do dia no fuso da loja, pra comparar "hoje/ontem".
+const dayKeyFormat = new Intl.DateTimeFormat("en-CA", { timeZone: STORE_TIMEZONE });
+
+// "14:32"
+export function formatTime(date: Date | string) {
+  return timeFormat.format(new Date(date));
+}
+
+// Dias de calendário (no fuso da loja) entre a data e agora: 0 = hoje, 1 = ontem.
+function daysAgo(date: Date | string, now: Date) {
+  const day = (d: Date) => Date.parse(dayKeyFormat.format(d));
+  return Math.round((day(now) - day(new Date(date))) / 86_400_000);
+}
+
+// Separador de dia no meio da conversa: "Hoje", "Ontem" ou "02/10/2026".
+export function formatDayLabel(date: Date | string, now = new Date()) {
+  const days = daysAgo(date, now);
+  return days === 0 ? "Hoje" : days === 1 ? "Ontem" : formatDate(date);
+}
+
+// Hora na lista de conversas: "14:32" (hoje), "Ontem" ou "02/10/2026".
+export function formatListTime(date: Date | string, now = new Date()) {
+  const days = daysAgo(date, now);
+  return days === 0 ? formatTime(date) : days === 1 ? "Ontem" : formatDate(date);
+}
+
+// Há quanto tempo o cliente espera resposta: "agora", "12 min", "1 h 05 min", "3 dias".
+export function formatWaitingTime(since: Date | string, now = new Date()) {
+  const minutes = Math.max(0, Math.floor((now.getTime() - new Date(since).getTime()) / 60_000));
+  if (minutes < 1) return "agora";
+  if (minutes < 60) return `${minutes} min`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return minutes % 60 ? `${hours} h ${String(minutes % 60).padStart(2, "0")} min` : `${hours} h`;
+  const days = Math.floor(hours / 24);
+  return `${days} dia${days === 1 ? "" : "s"}`;
+}
+
 export function onlyDigits(value: string) {
   return value.replace(/\D/g, "");
 }

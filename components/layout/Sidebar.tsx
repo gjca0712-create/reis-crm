@@ -6,10 +6,11 @@ import { usePathname } from "next/navigation";
 import { cn } from "@/lib/cn";
 import { NAV_ITEMS } from "./nav-items";
 import { canAccess, type Feature } from "@/lib/permissions";
+import { TeamChatBadge } from "./TeamChatBadge";
 
 export function Sidebar({ features }: { features: Feature[] }) {
   const pathname = usePathname();
-  const items = NAV_ITEMS.filter((item) => canAccess(features, item.feature));
+  const items = NAV_ITEMS.filter((item) => !item.feature || canAccess(features, item.feature));
 
   return (
     <aside className="hidden lg:flex w-64 shrink-0 flex-col border-r border-border bg-surface">
@@ -46,6 +47,7 @@ export function Sidebar({ features }: { features: Feature[] }) {
             >
               <Icon className="w-4 h-4 shrink-0" strokeWidth={2} />
               {item.label}
+              {item.badge === "team-chat" && <TeamChatBadge />}
             </Link>
           );
         })}

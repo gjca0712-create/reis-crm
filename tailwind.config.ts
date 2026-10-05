@@ -28,6 +28,20 @@ const config: Config = {
           600: "#96771F",
           700: "#6E5716",
         },
+        // WhatsApp Web (tema escuro) — telas de conversa (Suporte e Chat interno),
+        // pra ficarem com a cara do WhatsApp que a equipe já conhece.
+        wa: {
+          bg: "#0b141a",
+          list: "#111b21",
+          panel: "#202c33",
+          active: "#2a3942",
+          border: "#222d34",
+          out: "#005c4b",
+          text: "#e9edef",
+          muted: "#8696a0",
+          green: "#00a884",
+          note: "#182229",
+        },
         status: {
           good: "#0ca30c",
           warning: "#fab219",

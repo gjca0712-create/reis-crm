@@ -3,6 +3,7 @@ import { prisma } from "@/lib/prisma";
 import { requireCeo } from "@/lib/session";
 import { formatDate } from "@/lib/format";
 import { ROLE_LABELS } from "@/lib/constants";
+import { SECTORS, sectorLabel } from "@/lib/whatsapp/sectors";
 import { Card } from "@/components/ui/Card";
 import { createAgent } from "./actions";
 
@@ -34,6 +35,7 @@ export default async function AtendentesPage() {
                 <th className="font-medium py-3 px-5">Nome</th>
                 <th className="font-medium py-3 px-4">E-mail</th>
                 <th className="font-medium py-3 px-4">Perfil</th>
+                <th className="font-medium py-3 px-4">Setor</th>
                 <th className="font-medium py-3 px-4">Avaliação média</th>
                 <th className="font-medium py-3 px-4">Desde</th>
                 <th className="font-medium py-3 px-4">Permissões</th>
@@ -47,6 +49,7 @@ export default async function AtendentesPage() {
                     <td className="py-3 px-5 text-ink-primary font-medium">{u.name}</td>
                     <td className="py-3 px-4 text-ink-secondary">{u.email}</td>
                     <td className="py-3 px-4 text-ink-secondary">{ROLE_LABELS[u.role] ?? u.role}</td>
+                    <td className="py-3 px-4 text-ink-secondary">{u.sector ? sectorLabel(u.sector) : "—"}</td>
                     <td className="py-3 px-4 text-ink-primary tabular-nums">
                       {stats && stats._avg.score ? `${stats._avg.score.toFixed(1)} ★ (${stats._count._all})` : "—"}
                     </td>
@@ -89,6 +92,17 @@ export default async function AtendentesPage() {
               <option value="VENDEDOR">Vendedor</option>
               <option value="GERENTE">Gerente</option>
               <option value="CEO">CEO</option>
+            </select>
+          </label>
+          <label className="block">
+            <span className="block text-sm text-ink-secondary mb-1.5">Setor (WhatsApp Suporte)</span>
+            <select name="sector" defaultValue={""} className={inputClass}>
+              <option value="">Sem setor (só a entrada geral)</option>
+              {SECTORS.map((s) => (
+                <option key={s.id} value={s.id}>
+                  {s.label}
+                </option>
+              ))}
             </select>
           </label>
           <div className="sm:col-span-2 flex justify-end">

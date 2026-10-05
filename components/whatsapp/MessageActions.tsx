@@ -49,18 +49,18 @@ function EditBox({ text, action, onClose }: { text: string; action: MessageActio
           rows={3}
           autoFocus
           required
-          className="w-full resize-y rounded-lg bg-page border border-border px-3 py-2 text-sm text-ink-primary focus:outline-none focus:ring-2 focus:ring-gold-400/50"
+          className="w-full resize-y rounded-lg bg-wa-active border-0 px-3 py-2 text-sm text-wa-text focus:outline-none focus:ring-2 focus:ring-wa-green/50"
         />
         <div className="flex items-center justify-between gap-2">
-          <span className="text-[10px] text-ink-muted">O cliente vê a mensagem com a marca “Editada”.</span>
+          <span className="text-[10px] text-wa-muted">O cliente vê a mensagem com a marca “Editada”.</span>
           <div className="flex items-center gap-3 shrink-0">
-            <button type="button" onClick={onClose} className="text-xs text-ink-muted hover:text-ink-secondary">
+            <button type="button" onClick={onClose} className="text-xs text-wa-muted hover:text-wa-text">
               Cancelar
             </button>
             <button
               type="submit"
               disabled={saving}
-              className="rounded-lg bg-gold-400 text-page font-semibold px-3 py-1.5 text-xs hover:bg-gold-300 transition-colors disabled:opacity-60 disabled:cursor-wait"
+              className="rounded-lg bg-wa-green text-wa-bg font-semibold px-3 py-1.5 text-xs hover:brightness-110 transition-colors disabled:opacity-60 disabled:cursor-wait"
             >
               {saving ? "Salvando…" : "Salvar edição"}
             </button>
@@ -78,8 +78,8 @@ function ConfirmDelete({ action, onClose }: { action: MessageAction; onClose: ()
   return (
     <>
       <form action={submit} className="mt-1 flex flex-wrap items-center justify-end gap-x-3 gap-y-1 text-xs">
-        <span className="text-ink-secondary">Apagar para todos? O cliente também deixa de ver.</span>
-        <button type="button" onClick={onClose} className="text-ink-muted hover:text-ink-secondary">
+        <span className="text-wa-text">Apagar para todos? O cliente também deixa de ver.</span>
+        <button type="button" onClick={onClose} className="text-wa-muted hover:text-wa-text">
           Cancelar
         </button>
         <button
@@ -126,7 +126,7 @@ export function MessageActions({
           <button
             type="button"
             onClick={() => setMode("editing")}
-            className="inline-flex items-center gap-1 text-[11px] text-ink-muted hover:text-gold-400"
+            className="inline-flex items-center gap-1 text-[11px] text-wa-muted hover:text-wa-green"
           >
             <Pencil className="w-3 h-3" /> Editar
           </button>
@@ -135,13 +135,13 @@ export function MessageActions({
           <button
             type="button"
             onClick={() => setMode("confirmDelete")}
-            className="inline-flex items-center gap-1 text-[11px] text-ink-muted hover:text-status-critical"
+            className="inline-flex items-center gap-1 text-[11px] text-wa-muted hover:text-status-critical"
           >
             <Trash2 className="w-3 h-3" /> Apagar
           </button>
         )}
       </div>
-      <span className="text-[10px] text-ink-muted">{senderLabel}</span>
+      <span className="text-[10px] text-wa-muted">{senderLabel}</span>
     </div>
   );
 }

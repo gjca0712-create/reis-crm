@@ -7,6 +7,9 @@ import { canManageQueue } from "./message-permissions";
 // que estão com ele — CEO e Gerente também. Eles podem trocar pra visão
 // "Equipe" (supervisão), que mostra ainda as conversas com os colegas e as
 // finalizadas.
+// Setores (lib/whatsapp/sectors.ts): conversa transferida pra um setor só
+// aparece em "Em espera" pra quem é dele (e pra CEO/Gerente). Sem setor
+// (entrada geral, toda conversa nova) aparece pra todo mundo.
 export type QueueSection = "waiting" | "mine" | "team" | "resolved";
 
 // "mine" = a fila da pessoa (padrão, e a única pra quem não supervisiona);
@@ -34,8 +37,42 @@ export const QUEUE_SECTION_EMPTY: Partial<Record<QueueSection, string>> = {
   mine: "Nenhuma conversa com você.",
 };
 
-type Viewer = { userId: string; role: string };
-type QueuedConversation = { status: string; assignedToId: string | null };
+// sector: setor de quem está vendo (User.sector) — ver loadQueueViewer.
+export type QueueViewer = { userId: string; role: string; sector?: string | null };
+type Viewer = QueueViewer;
+type QueuedConversation = { status: string; assignedToId: string | null; sector?: string | null };
+
+// Setor da pessoa logada (não vai no token da sessão: o CEO pode trocar o
+// setor de alguém a qualquer hora e tem que valer na hora).
+export async function loadQueueViewer(session: { userId: string; role: string }): Promise<QueueViewer> {
+  const user = await prisma.user.findUnique({ where: { id: session.userId }, select: { sector: true } });
+  return { userId: session.userId, role: session.role, sector: user?.sector ?? null };
+}
+
+// Conversa em espera de um setor: só o próprio setor (e CEO/Gerente) enxerga.
+export function canSeeWaiting(viewer: Viewer, sector: string | null | undefined): boolean {
+  return canManageQueue(viewer.role) || !sector || sector === viewer.sector;
+}
+
+function waitingWhere(viewer: Viewer): Prisma.ConversationWhereInput {
+  if (canManageQueue(viewer.role)) return {};
+  return viewer.sector ? { OR: [{ sector: null }, { sector: viewer.sector }] } : { sector: null };
+}
+
+// Por que essa pessoa não pode mexer na conversa (responder, assumir,
+// resolver, transferir) — null = pode. A tela já esconde; as actions conferem
+// de novo, porque a tela só atualiza a cada 12s.
+export function queueBlockReason(
+  viewer: Viewer,
+  conversation: QueuedConversation
+): "assumida-por-outro" | "outro-setor" | null {
+  if (canManageQueue(viewer.role)) return null;
+  if (conversation.assignedToId && conversation.assignedToId !== viewer.userId) return "assumida-por-outro";
+  if (!conversation.assignedToId && conversation.status !== "RESOLVED" && !canSeeWaiting(viewer, conversation.sector)) {
+    return "outro-setor";
+  }
+  return null;
+}
 
 // Visão "Equipe" só vale pra quem supervisiona; pros outros é sempre a própria fila.
 export function seesWholeTeam(viewer: Viewer, view: QueueView): boolean {
@@ -59,7 +96,10 @@ export function queueSection(conversation: QueuedConversation, userId: string): 
 // carrega as finalizadas nem as dos colegas.
 export function queueListWhere(viewer: Viewer, view: QueueView = "mine"): Prisma.ConversationWhereInput {
   if (seesWholeTeam(viewer, view)) return {};
-  return { status: { not: "RESOLVED" }, OR: [{ assignedToId: null }, { assignedToId: viewer.userId }] };
+  return {
+    status: { not: "RESOLVED" },
+    OR: [{ assignedToId: viewer.userId }, { AND: [{ assignedToId: null }, waitingWhere(viewer)] }],
+  };
 }
 
 export function groupByQueueSection<T extends QueuedConversation>(
@@ -69,17 +109,22 @@ export function groupByQueueSection<T extends QueuedConversation>(
 ): { section: QueueSection; conversations: T[] }[] {
   return visibleQueueSections(viewer, view).map((section) => ({
     section,
-    conversations: conversations.filter((c) => queueSection(c, viewer.userId) === section),
+    conversations: conversations.filter(
+      (c) => queueSection(c, viewer.userId) === section && (section !== "waiting" || canSeeWaiting(viewer, c.sector))
+    ),
   }));
 }
 
 // A conversa que abre depois de concluir um atendimento: a primeira da fila na
-// ordem da tela, sem contar as finalizadas. null = fila vazia.
-export async function firstInQueue(viewer: Viewer, view: QueueView = "mine"): Promise<string | null> {
+// ordem da tela, sem contar as finalizadas. null = fila vazia. skipId: a que
+// acabou de sair (transferida) — CEO/Gerente ainda a veem na espera.
+export async function firstInQueue(viewer: Viewer, view: QueueView = "mine", skipId?: string): Promise<string | null> {
   const open = await prisma.conversation.findMany({
-    where: { AND: [queueListWhere(viewer, view), { status: { not: "RESOLVED" } }] },
+    where: {
+      AND: [queueListWhere(viewer, view), { status: { not: "RESOLVED" } }, ...(skipId ? [{ id: { not: skipId } }] : [])],
+    },
     orderBy: { lastMessageAt: "desc" },
-    select: { id: true, status: true, assignedToId: true },
+    select: { id: true, status: true, assignedToId: true, sector: true },
   });
   return groupByQueueSection(open, viewer, view).flatMap((s) => s.conversations)[0]?.id ?? null;
 }

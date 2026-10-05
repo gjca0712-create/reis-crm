@@ -8,11 +8,12 @@ import { Menu, X } from "lucide-react";
 import { cn } from "@/lib/cn";
 import { NAV_ITEMS } from "./nav-items";
 import { canAccess, type Feature } from "@/lib/permissions";
+import { TeamChatBadge } from "./TeamChatBadge";
 
 export function MobileNav({ features }: { features: Feature[] }) {
   const [open, setOpen] = useState(false);
   const pathname = usePathname();
-  const items = NAV_ITEMS.filter((item) => canAccess(features, item.feature));
+  const items = NAV_ITEMS.filter((item) => !item.feature || canAccess(features, item.feature));
 
   return (
     <div className="lg:hidden">
@@ -64,6 +65,7 @@ export function MobileNav({ features }: { features: Feature[] }) {
                   >
                     <Icon className="w-4 h-4 shrink-0" strokeWidth={2} />
                     {item.label}
+                    {item.badge === "team-chat" && <TeamChatBadge />}
                   </Link>
                 );
               })}

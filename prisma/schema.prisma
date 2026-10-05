@@ -21,12 +21,17 @@ model User {
   // personalizada de features que esse usuário específico pode acessar.
   featureOverrides Json?
   createdAt    DateTime @default(now())
+  // Setor do atendimento (lib/whatsapp/sectors.ts). Vê na fila de espera as
+  // conversas sem setor e as transferidas pro dele. null = sem setor.
+  sector       String?
 
   sentMessages          Message[]
   resolvedConversations Conversation[] @relation("ResolvedConversations")
   assignedConversations Conversation[] @relation("AssignedConversations")
   ratings               Rating[]
   occurrencesReported   Occurrence[]
+  conversationTransfers ConversationTransfer[]
+  teamMessages          TeamMessage[]
 }
 
 // Sem relation pro User de propósito — guarda ator/alvo como texto solto, não
@@ -172,8 +177,29 @@ model Conversation {
   assignedToId String?
   assignedTo   User?   @relation("AssignedConversations", fields: [assignedToId], references: [id])
 
-  messages Message[]
-  rating   Rating?
+  // Setor que está com a conversa (lib/whatsapp/sectors.ts) — muda quando
+  // alguém transfere. null = entrada geral (toda conversa nova começa assim).
+  sector String?
+
+  messages  Message[]
+  rating    Rating?
+  transfers ConversationTransfer[]
+}
+
+// Transferência de uma conversa pra outro setor, com o motivo escrito por quem
+// transferiu. Aparece no meio da conversa, na hora em que aconteceu.
+model ConversationTransfer {
+  id             String       @id @default(cuid())
+  conversationId String
+  conversation   Conversation @relation(fields: [conversationId], references: [id])
+  fromSector     String?
+  toSector       String
+  reason         String
+  byUserId       String
+  byUser         User         @relation(fields: [byUserId], references: [id])
+  createdAt      DateTime     @default(now())
+
+  @@index([conversationId])
 }
 
 model Message {
@@ -234,6 +260,28 @@ model WaSentPayload {
   createdAt DateTime @default(now())
 
   @@index([createdAt])
+}
+
+// Chat interno da equipe (/admin/chat-interno). channel: "geral" ou
+// "dm:<idMenor>:<idMaior>" pra conversa privada entre dois usuários.
+model TeamMessage {
+  id        String   @id @default(cuid())
+  channel   String
+  senderId  String
+  sender    User     @relation(fields: [senderId], references: [id])
+  body      String
+  createdAt DateTime @default(now())
+
+  @@index([channel, createdAt])
+}
+
+// Até quando cada usuário já leu cada canal do chat interno (contagem de não lidas).
+model TeamChatRead {
+  userId     String
+  channel    String
+  lastReadAt DateTime
+
+  @@id([userId, channel])
 }
 
 // Avaliação do atendimento, coletada do cliente após a conversa ser resolvida.

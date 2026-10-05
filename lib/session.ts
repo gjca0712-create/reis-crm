@@ -48,3 +48,10 @@ export async function requireFeature(feature: Feature): Promise<SessionPayload> 
   }
   return session;
 }
+
+// Telas liberadas pra toda a equipe (ex.: chat interno) — só exige estar logado.
+export async function requireSession(): Promise<SessionPayload> {
+  const session = await getSession();
+  if (!session) redirect("/admin/login");
+  return session;
+}

@@ -29,19 +29,29 @@ import {
   type MessageActionResult,
 } from "@/lib/whatsapp/message-permissions";
 import { RATING_PROMPT, isRatingPrompt, stopWaitingForRating, removeAudioCaption } from "@/lib/whatsapp/inbound";
-import { QUEUE_VIEW_COOKIE, firstInQueue, parseQueueView, type QueueView } from "@/lib/whatsapp/queue";
+import {
+  QUEUE_VIEW_COOKIE,
+  firstInQueue,
+  loadQueueViewer,
+  parseQueueView,
+  queueBlockReason,
+  type QueueView,
+  type QueueViewer,
+} from "@/lib/whatsapp/queue";
+import { transferConversationAs } from "@/lib/whatsapp/transfer";
 import { logAudit } from "@/lib/audit";
-import type { SessionPayload } from "@/lib/auth";
 
-// Conversa assumida por OUTRO atendente — a tela já esconde, mas a action
-// confere de novo: a tela do atendente só atualiza a cada 12s, então ele pode
-// clicar "Enviar"/"Resolvido" numa conversa que um colega acabou de assumir.
-// Quem chama redireciona com aviso em vez de lançar erro (erro de server
-// action vira a tela genérica "Algo deu errado" em produção).
-function isHeldByAnother(conversation: { assignedToId: string | null }, session: SessionPayload): boolean {
-  return Boolean(
-    conversation.assignedToId && conversation.assignedToId !== session.userId && !canManageQueue(session.role)
-  );
+// Conversa assumida por OUTRO atendente, ou transferida pra outro setor — a
+// tela já esconde, mas a action confere de novo: a tela do atendente só
+// atualiza a cada 12s, então ele pode clicar "Enviar"/"Resolvido" numa conversa
+// que um colega acabou de assumir. Redireciona com aviso em vez de lançar erro
+// (erro de server action vira a tela genérica "Algo deu errado" em produção).
+function redirectIfBlocked(
+  viewer: QueueViewer,
+  conversation: { status: string; assignedToId: string | null; sector: string | null }
+) {
+  const reason = queueBlockReason(viewer, conversation);
+  if (reason) redirect(`/admin/whatsapp/suporte?aviso=${reason}`);
 }
 
 // Assume a conversa pra fila pessoal do atendente. Update condicional
@@ -52,6 +62,13 @@ function isHeldByAnother(conversation: { assignedToId: string | null }, session:
 // o histórico dos colegas.
 export async function claimConversation(conversationId: string) {
   const session = await requireFeature("whatsapp_suporte");
+  const viewer = await loadQueueViewer(session);
+  const target = await prisma.conversation.findUnique({
+    where: { id: conversationId },
+    select: { status: true, assignedToId: true, sector: true },
+  });
+  if (!target) return;
+  if (queueBlockReason(viewer, target) === "outro-setor") redirect("/admin/whatsapp/suporte?aviso=outro-setor");
 
   const result = await prisma.conversation.updateMany({
     where: { id: conversationId, assignedToId: null, status: "OPEN" },
@@ -143,7 +160,7 @@ export async function sendSupportReply(conversationId: string, formData: FormDat
     include: { customer: true },
   });
   if (!conversation) return;
-  if (isHeldByAnother(conversation, session)) redirect("/admin/whatsapp/suporte?aviso=assumida-por-outro");
+  redirectIfBlocked(await loadQueueViewer(session), conversation);
 
   const line = toWhatsAppLineId(conversation.line);
   const phone = conversation.customer.phone;
@@ -233,6 +250,32 @@ export async function startConversation(
   return outcome;
 }
 
+// --- Transferir pra outro setor ---------------------------------------------------
+// Regras em lib/whatsapp/transfer.ts. Sem redirect, igual à Nova conversa:
+// dando erro, a janela continua aberta com o texto; dando certo, a tela abre a
+// próxima da fila (next).
+export type TransferResult = { error: string } | { next: string | null } | undefined;
+
+export async function transferConversation(
+  conversationId: string,
+  _prev: TransferResult,
+  formData: FormData
+): Promise<TransferResult> {
+  const session = await requireFeature("whatsapp_suporte");
+  const viewer = await loadQueueViewer(session);
+  const result = await transferConversationAs(
+    viewer,
+    conversationId,
+    String(formData.get("sector") || ""),
+    String(formData.get("reason") || "")
+  );
+  if ("error" in result) return result;
+
+  revalidatePath("/admin/whatsapp/suporte");
+  const view = parseQueueView((await cookies()).get(QUEUE_VIEW_COOKIE)?.value);
+  return { next: await firstInQueue(viewer, view, conversationId) };
+}
+
 // Pedido de avaliação DESLIGADO (2026-09-28): a mesma mensagem automática pra
 // todo cliente atendido pode fazer o WhatsApp tratar a linha como spam. O
 // formato novo ainda vai ser decidido; WHATSAPP_RATING_PROMPT=1 no Railway
@@ -243,13 +286,14 @@ const SEND_RATING_PROMPT = process.env.WHATSAPP_RATING_PROMPT === "1";
 // avaliação ligado, também manda a pergunta (1 a 5) pro cliente via WhatsApp.
 export async function resolveConversation(conversationId: string) {
   const session = await requireFeature("whatsapp_suporte");
+  const viewer = await loadQueueViewer(session);
 
   const conversation = await prisma.conversation.findUnique({
     where: { id: conversationId },
     include: { customer: true },
   });
   if (!conversation) return;
-  if (isHeldByAnother(conversation, session)) redirect("/admin/whatsapp/suporte?aviso=assumida-por-outro");
+  redirectIfBlocked(viewer, conversation);
 
   const { sent, ref }: WaSendResult = SEND_RATING_PROMPT
     ? await sendWhatsAppMessage(toWhatsAppLineId(conversation.line), conversation.customer, RATING_PROMPT)
@@ -291,7 +335,7 @@ export async function resolveConversation(conversationId: string) {
   // Concluída sai da tela: abre a próxima da fila (com o id na URL, senão a
   // conversa aberta trocaria sozinha quando a lista reordena no auto-refresh).
   const view = parseQueueView((await cookies()).get(QUEUE_VIEW_COOKIE)?.value);
-  const next = await firstInQueue(session, view);
+  const next = await firstInQueue(viewer, view);
   const query = [next && `c=${next}`, aviso && `aviso=${aviso}`].filter(Boolean).join("&");
   redirect(`/admin/whatsapp/suporte${query ? `?${query}` : ""}`);
 }
@@ -309,7 +353,16 @@ async function loadSentMessage(messageId: string) {
   return prisma.message.findUnique({
     where: { id: messageId },
     include: {
-      conversation: { select: { id: true, line: true, assignedToId: true, customer: { select: { name: true } } } },
+      conversation: {
+        select: {
+          id: true,
+          line: true,
+          status: true,
+          assignedToId: true,
+          sector: true,
+          customer: { select: { name: true } },
+        },
+      },
     },
   });
 }
@@ -324,7 +377,7 @@ export async function editSupportMessage(
 
   const message = await loadSentMessage(messageId);
   if (!message) return { aviso: "indisponivel" };
-  if (isHeldByAnother(message.conversation, session)) redirect("/admin/whatsapp/suporte?aviso=assumida-por-outro");
+  redirectIfBlocked(await loadQueueViewer(session), message.conversation);
 
   const rules = sentMessagePermissions(message, session);
   if (!rules.editable) return { aviso: "indisponivel" };
@@ -361,7 +414,7 @@ export async function deleteSupportMessage(messageId: string): Promise<MessageAc
 
   const message = await loadSentMessage(messageId);
   if (!message) return { aviso: "indisponivel" };
-  if (isHeldByAnother(message.conversation, session)) redirect("/admin/whatsapp/suporte?aviso=assumida-por-outro");
+  redirectIfBlocked(await loadQueueViewer(session), message.conversation);
 
   const rules = sentMessagePermissions(message, session);
   if (!rules.allowed) return { aviso: "indisponivel" };

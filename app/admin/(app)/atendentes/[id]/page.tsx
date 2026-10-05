@@ -4,6 +4,7 @@ import { ArrowLeft } from "lucide-react";
 import { prisma } from "@/lib/prisma";
 import { requireCeo } from "@/lib/session";
 import { ROLE_LABELS, type Role } from "@/lib/constants";
+import { SECTORS } from "@/lib/whatsapp/sectors";
 import { customizableFeaturesFor, FEATURE_LABELS, defaultFeaturesFor, resolveFeatures } from "@/lib/permissions";
 import { Card } from "@/components/ui/Card";
 import { updatePermissions, resetPermissions, updateUserInfo, resetUserPassword } from "../actions";
@@ -74,6 +75,17 @@ export default async function EditarUsuarioPage({ params }: { params: Promise<{ 
                 <option value="CEO">CEO</option>
               </select>
             )}
+          </label>
+          <label className="block">
+            <span className="block text-sm text-ink-secondary mb-1.5">Setor (WhatsApp Suporte)</span>
+            <select name="sector" defaultValue={user.sector ?? ""} className={inputClass}>
+              <option value="">Sem setor (só a entrada geral)</option>
+              {SECTORS.map((s) => (
+                <option key={s.id} value={s.id}>
+                  {s.label}
+                </option>
+              ))}
+            </select>
           </label>
           <div className="sm:col-span-2 flex justify-end">
             <button

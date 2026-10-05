@@ -1,27 +1,20 @@
 import Link from "next/link";
 import type { ReactNode } from "react";
-import { ChevronDown } from "lucide-react";
-import { formatPhone } from "@/lib/format";
+import { ChevronDown, Camera, Video, Mic, FileText } from "lucide-react";
+import { formatListTime, formatPhone, formatWaitingTime } from "@/lib/format";
 import { whatsappLineLabel } from "@/lib/whatsapp/lines";
-import { Card } from "@/components/ui/Card";
+import { sectorLabel } from "@/lib/whatsapp/sectors";
 import { QUEUE_SECTION_EMPTY, QUEUE_SECTION_LABELS, type QueueSection } from "@/lib/whatsapp/queue";
 
-// Fundo bem fraco em cada conversa da lista, só pra identificar o estado de
-// relance (o texto continua legível normal): vermelho = cliente esperando
-// resposta, amarelo = já respondida (ainda aberta), verde = finalizada.
-// Classes completas aqui pro Tailwind enxergar. Vermelho rosado e amarelo limão
-// de propósito (não os status-critical/warning): sobre o fundo marrom escuro,
-// o vermelho alaranjado e o amarelo dourado viram dois tons de marrom quase iguais.
-const ROW_TONES = {
-  unanswered: {
-    idle: "bg-[rgba(244,63,94,0.14)] hover:bg-[rgba(244,63,94,0.2)]",
-    active: "bg-[rgba(244,63,94,0.26)]",
-  },
-  inProgress: {
-    idle: "bg-[rgba(250,204,21,0.09)] hover:bg-[rgba(250,204,21,0.14)]",
-    active: "bg-[rgba(250,204,21,0.18)]",
-  },
-  resolved: { idle: "bg-status-good/10 hover:bg-status-good/15", active: "bg-status-good/20" },
+// Listas com a cara do WhatsApp Web (cores wa-* no tailwind.config). O estado
+// de cada conversa fica numa faixa fina à esquerda, pra identificar de relance:
+// vermelho = cliente esperando resposta, amarelo = já respondida (ainda
+// aberta), verde = finalizada. Vermelho rosado e amarelo limão de propósito —
+// sobre o fundo escuro ficam bem distintos um do outro.
+const STATE_BAR = {
+  unanswered: "bg-[rgb(244,63,94)]",
+  inProgress: "bg-[rgb(250,204,21)]",
+  resolved: "bg-status-good",
 } as const;
 
 // Legenda das cores acima (a página mostra junto do título).
@@ -29,29 +22,35 @@ export function QueueLegend({ showResolved }: { showResolved: boolean }) {
   return (
     <div className="flex flex-wrap gap-x-4 gap-y-1 text-[11px] text-ink-muted">
       <span className="inline-flex items-center gap-1.5">
-        <span className="w-2.5 h-2.5 rounded-sm bg-[rgba(244,63,94,0.5)]" /> Sem resposta
+        <span className={`w-1 h-3 rounded-full ${STATE_BAR.unanswered}`} /> Sem resposta
       </span>
       <span className="inline-flex items-center gap-1.5">
-        <span className="w-2.5 h-2.5 rounded-sm bg-[rgba(250,204,21,0.45)]" /> Respondida
+        <span className={`w-1 h-3 rounded-full ${STATE_BAR.inProgress}`} /> Respondida
       </span>
       {showResolved && (
         <span className="inline-flex items-center gap-1.5">
-          <span className="w-2.5 h-2.5 rounded-sm bg-status-good/40" /> Finalizada
+          <span className={`w-1 h-3 rounded-full ${STATE_BAR.resolved}`} /> Finalizada
         </span>
       )}
     </div>
   );
 }
 
+type ListMessage = { direction: string; body: string; mediaType: string | null; createdAt: Date };
+
 export type QueueConversation = {
   id: string;
   status: string;
   line: string;
+  sector: string | null;
+  lastMessageAt: Date;
   customer: { name: string; phone: string };
   rating: { score: number } | null;
   assignedTo: { id: string; name: string } | null;
-  // Só a última mensagem (sem as apagadas): IN = o cliente falou por último.
-  messages: { direction: string }[];
+  // Últimas mensagens (sem as apagadas), da mais nova pra mais velha: a
+  // primeira dá a prévia e se o cliente falou por último (IN = sem resposta);
+  // a sequência de IN no começo dá desde quando ele espera.
+  messages: ListMessage[];
 };
 
 type Sections<T> = { section: QueueSection; conversations: T[] }[];
@@ -60,7 +59,7 @@ type Sections<T> = { section: QueueSection; conversations: T[] }[];
 // atendimento" (as que estão com quem está logado; na visão "Equipe" de
 // CEO/Gerente, também as dos colegas e as finalizadas, recolhidas).
 // currentToolbar: faixa logo abaixo do título de Em atendimento (a chave
-// Meus/Equipe da página). Devolve os dois Cards soltos — quem posiciona é o
+// Meus/Equipe da página). Devolve as duas colunas soltas — quem posiciona é o
 // grid da página.
 export function QueueColumns<T extends QueueConversation>({
   sections,
@@ -73,15 +72,16 @@ export function QueueColumns<T extends QueueConversation>({
   userId: string;
   currentToolbar?: ReactNode;
 }) {
+  const now = new Date();
   const waiting = sections.find((s) => s.section === "waiting")?.conversations ?? [];
   const current = sections.filter((s) => s.section !== "waiting");
   const inProgress = current.filter((s) => s.section !== "resolved").reduce((n, s) => n + s.conversations.length, 0);
   // Atendente só tem "Com você" nessa coluna: o título já diz, sem subtítulo.
   const onlyMine = current.length === 1 && current[0].section === "mine";
 
-  const row = (c: T) => <QueueRow key={c.id} conversation={c} active={c.id === activeId} userId={userId} />;
+  const row = (c: T) => <QueueRow key={c.id} conversation={c} active={c.id === activeId} userId={userId} now={now} />;
   const rowsOrEmpty = (rows: T[], empty: string | undefined) =>
-    rows.length > 0 ? rows.map(row) : empty ? <p className="px-4 py-3 text-xs text-ink-muted">{empty}</p> : null;
+    rows.length > 0 ? rows.map(row) : empty ? <p className="px-4 py-3 text-xs text-wa-muted">{empty}</p> : null;
 
   return (
     <>
@@ -103,11 +103,11 @@ export function QueueColumns<T extends QueueConversation>({
                     )}
                     {QUEUE_SECTION_LABELS[section]}
                   </span>
-                  <span className="text-ink-muted">{rows.length}</span>
+                  <span>{rows.length}</span>
                 </>
               );
               const headerClass =
-                "sticky top-0 z-10 flex items-center justify-between gap-2 border-b border-border bg-surface-raised px-4 py-1.5 text-[11px] font-semibold uppercase tracking-wide text-ink-secondary";
+                "sticky top-0 z-10 flex items-center justify-between gap-2 border-b border-wa-border bg-wa-list px-4 py-1.5 text-[11px] font-semibold uppercase tracking-wide text-wa-green";
 
               // Finalizadas começam recolhidas: é histórico, e empurraria a
               // fila pra baixo. Abre sozinha se a conversa à direita está nela.
@@ -147,12 +147,12 @@ function QueueColumn({
   children: ReactNode;
 }) {
   return (
-    <Card className="p-0 overflow-hidden flex flex-col min-h-0 max-h-80 lg:max-h-none">
-      <div className="flex items-center justify-between gap-2 px-4 py-2.5 border-b border-border">
-        <h2 className="text-sm font-semibold text-ink-primary">{title}</h2>
+    <div className="rounded-2xl border border-wa-border bg-wa-list overflow-hidden flex flex-col min-h-0 max-h-80 lg:max-h-none">
+      <div className="flex items-center justify-between gap-2 px-4 py-3 bg-wa-panel">
+        <h2 className="text-[15px] font-medium text-wa-text">{title}</h2>
         <span
-          className={`rounded-full px-2 text-xs font-semibold ${
-            alert ? "bg-[rgba(244,63,94,0.3)] text-ink-primary" : "bg-surface-raised text-ink-muted"
+          className={`min-w-[22px] rounded-full px-1.5 text-center text-xs font-semibold leading-[22px] ${
+            alert ? "bg-wa-green text-wa-bg" : "bg-wa-active text-wa-muted"
           }`}
         >
           {count}
@@ -160,49 +160,105 @@ function QueueColumn({
       </div>
       {toolbar}
       <div className="overflow-y-auto flex-1 min-h-0">{children}</div>
-    </Card>
+    </div>
   );
 }
 
-// Uma linha da lista: cor pelo estado (ver ROW_TONES) e negrito quando o
-// cliente falou por último (ainda sem resposta), igual o próprio WhatsApp.
+const MEDIA_PREVIEW: Record<string, { icon: typeof Camera; label: string }> = {
+  image: { icon: Camera, label: "Foto" },
+  video: { icon: Video, label: "Vídeo" },
+  audio: { icon: Mic, label: "Áudio" },
+  document: { icon: FileText, label: "Documento" },
+};
+
+// Prévia da última mensagem, como na lista do WhatsApp: "Você: ..." quando
+// fomos nós, e ícone + "Foto"/"Áudio" quando é anexo sem texto.
+function Preview({ message }: { message: ListMessage | undefined }) {
+  if (!message) return <span className="italic">Sem mensagens</span>;
+  const media = message.mediaType ? MEDIA_PREVIEW[message.mediaType] : undefined;
+  const Icon = media?.icon;
+  return (
+    <>
+      {message.direction === "OUT" && "Você: "}
+      {Icon && <Icon className="inline w-3.5 h-3.5 -mt-0.5 mr-1" />}
+      {message.body || media?.label || ""}
+    </>
+  );
+}
+
+// Desde quando o cliente espera: a mensagem dele mais antiga depois da nossa
+// última resposta (dentro das que a lista carrega).
+function waitingSince(messages: ListMessage[]): Date | null {
+  let since: Date | null = null;
+  for (const m of messages) {
+    if (m.direction !== "IN") break;
+    since = m.createdAt;
+  }
+  return since;
+}
+
+// Uma linha da lista, no formato do WhatsApp: foto (inicial), nome e hora da
+// última mensagem em cima, prévia embaixo. Sem resposta: nome em negrito, hora
+// verde e o tempo de espera no lugar do contador de não lidas.
 function QueueRow({
   conversation: c,
   active,
   userId,
+  now,
 }: {
   conversation: QueueConversation;
   active: boolean;
   userId: string;
+  now: Date;
 }) {
-  const unanswered = c.messages[0]?.direction === "IN";
-  const tone = c.status === "RESOLVED" ? ROW_TONES.resolved : unanswered ? ROW_TONES.unanswered : ROW_TONES.inProgress;
+  const last = c.messages[0];
+  const unanswered = c.status !== "RESOLVED" && last?.direction === "IN";
+  const since = unanswered ? waitingSince(c.messages) : null;
+  const bar = c.status === "RESOLVED" ? STATE_BAR.resolved : unanswered ? STATE_BAR.unanswered : STATE_BAR.inProgress;
+  const details = [
+    whatsappLineLabel(c.line),
+    c.sector && sectorLabel(c.sector),
+    // Com você já é a coluna; aqui só quando é de um colega.
+    c.assignedTo && c.assignedTo.id !== userId && `Com ${c.assignedTo.name}`,
+    c.rating && `${c.rating.score}★`,
+  ].filter(Boolean);
+
   return (
     <Link
       href={`/admin/whatsapp/suporte?c=${c.id}`}
-      className={`flex items-start gap-3 px-4 py-3 border-b border-border/60 transition-colors ${
-        active ? `${tone.active} shadow-[inset_3px_0_0_0_#D4AF37]` : tone.idle
+      className={`relative flex items-center gap-3 pl-4 pr-3 py-2.5 transition-colors ${
+        active ? "bg-wa-active" : "hover:bg-wa-panel"
       }`}
     >
-      <div className="w-9 h-9 rounded-full bg-gold-400/15 border border-gold-700/40 flex items-center justify-center text-xs font-semibold text-gold-400 shrink-0">
+      <span className={`absolute left-0 top-2 bottom-2 w-[3px] rounded-r-full ${bar}`} />
+      <div className="w-11 h-11 rounded-full bg-[#6a7175]/40 flex items-center justify-center text-base font-medium text-wa-text shrink-0">
         {c.customer.name.slice(0, 1).toUpperCase()}
       </div>
-      <div className="min-w-0 flex-1">
-        <span className={`block text-sm text-ink-primary truncate ${unanswered ? "font-semibold" : "font-normal"}`}>
-          {c.customer.name}
-        </span>
-        <div
-          className={`text-xs truncate ${unanswered ? "text-ink-primary font-semibold" : "text-ink-muted font-normal"}`}
-        >
-          {formatPhone(c.customer.phone)}
-          <span className={unanswered ? "" : "text-ink-secondary"}> · {whatsappLineLabel(c.line)}</span>
-          {c.rating && <span className="text-gold-400"> · {c.rating.score}★</span>}
+      <div className="min-w-0 flex-1 border-b border-wa-border/70 pb-2.5 -mb-2.5">
+        <div className="flex items-baseline justify-between gap-2">
+          <span className={`text-[15px] text-wa-text truncate ${unanswered ? "font-semibold" : "font-normal"}`}>
+            {c.customer.name}
+          </span>
+          <span className={`text-xs shrink-0 ${unanswered ? "text-wa-green font-medium" : "text-wa-muted"}`}>
+            {formatListTime(last?.createdAt ?? c.lastMessageAt, now)}
+          </span>
         </div>
-        {/* Com você já é a coluna; aqui só quando é de um colega — linha
-            própria, senão a coluna estreita corta o nome. */}
-        {c.assignedTo && c.assignedTo.id !== userId && (
-          <div className="text-[11px] text-gold-400 truncate">Com {c.assignedTo.name}</div>
-        )}
+        <div className="flex items-center justify-between gap-2 mt-0.5">
+          <span className={`text-[13px] truncate ${unanswered ? "text-wa-text" : "text-wa-muted"}`}>
+            <Preview message={last} />
+          </span>
+          {since && (
+            <span
+              className="shrink-0 rounded-full bg-wa-green px-1.5 text-[11px] font-semibold leading-[18px] text-wa-bg"
+              title="Tempo esperando resposta"
+            >
+              {formatWaitingTime(since, now)}
+            </span>
+          )}
+        </div>
+        <div className="text-[11px] text-wa-muted truncate mt-0.5">
+          {formatPhone(c.customer.phone)} · {details.join(" · ")}
+        </div>
       </div>
     </Link>
   );

@@ -9,6 +9,7 @@ import { requireCeo } from "@/lib/session";
 import { customizableFeaturesFor, type Feature } from "@/lib/permissions";
 import { logAudit } from "@/lib/audit";
 import type { Role } from "@/lib/constants";
+import { isSectorId } from "@/lib/whatsapp/sectors";
 
 function str(formData: FormData, key: string) {
   const v = formData.get(key);
@@ -17,6 +18,12 @@ function str(formData: FormData, key: string) {
 
 const VALID_ROLES: Role[] = ["CEO", "GERENTE", "VENDEDOR", "ATENDENTE"];
 
+// Setor do WhatsApp Suporte (lib/whatsapp/sectors.ts); vazio/inválido = sem setor.
+function sectorFrom(formData: FormData): string | null {
+  const sector = str(formData, "sector");
+  return isSectorId(sector) ? sector : null;
+}
+
 export async function createAgent(formData: FormData) {
   const ceo = await requireCeo();
 
@@ -24,6 +31,7 @@ export async function createAgent(formData: FormData) {
   const email = str(formData, "email").toLowerCase();
   const password = str(formData, "password");
   const role = str(formData, "role") || "ATENDENTE";
+  const sector = sectorFrom(formData);
 
   if (!name || !email || !password) {
     throw new Error("Nome, e-mail e senha são obrigatórios.");
@@ -38,14 +46,14 @@ export async function createAgent(formData: FormData) {
   }
 
   const passwordHash = await hashPassword(password);
-  const created = await prisma.user.create({ data: { name, email, passwordHash, role } });
+  const created = await prisma.user.create({ data: { name, email, passwordHash, role, sector } });
 
   await logAudit({
     actor: ceo,
     action: "user.create",
     targetId: created.id,
     targetLabel: created.email,
-    details: { name, role },
+    details: { name, role, sector },
   });
 
   revalidatePath("/admin/atendentes");
@@ -126,6 +134,7 @@ export async function updateUserInfo(formData: FormData) {
   const name = str(formData, "name");
   const email = str(formData, "email").toLowerCase();
   const roleInput = str(formData, "role");
+  const sector = sectorFrom(formData);
 
   if (!userId) throw new Error("Usuário não informado.");
   if (!name || !email) throw new Error("Nome e e-mail são obrigatórios.");
@@ -144,7 +153,7 @@ export async function updateUserInfo(formData: FormData) {
     if (existing) throw new Error("Já existe um usuário com esse e-mail.");
   }
 
-  await prisma.user.update({ where: { id: userId }, data: { name, email, role } });
+  await prisma.user.update({ where: { id: userId }, data: { name, email, role, sector } });
 
   await logAudit({
     actor: ceo,
@@ -152,8 +161,8 @@ export async function updateUserInfo(formData: FormData) {
     targetId: user.id,
     targetLabel: email,
     details: {
-      before: { name: user.name, email: user.email, role: user.role },
-      after: { name, email, role },
+      before: { name: user.name, email: user.email, role: user.role, sector: user.sector },
+      after: { name, email, role, sector },
     },
   });
 
