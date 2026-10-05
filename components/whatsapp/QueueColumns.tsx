@@ -4,6 +4,7 @@ import { ChevronDown, Camera, Video, Mic, FileText } from "lucide-react";
 import { formatListTime, formatPhone, formatWaitingTime } from "@/lib/format";
 import { whatsappLineLabel } from "@/lib/whatsapp/lines";
 import { sectorLabel } from "@/lib/whatsapp/sectors";
+import { closingKind } from "@/lib/whatsapp/closing";
 import { QUEUE_SECTION_EMPTY, QUEUE_SECTION_LABELS, type QueueSection } from "@/lib/whatsapp/queue";
 
 // Listas com a cara do WhatsApp Web (cores wa-* no tailwind.config). O estado
@@ -212,7 +213,10 @@ function QueueRow({
   now: Date;
 }) {
   const last = c.messages[0];
-  const unanswered = c.status !== "RESOLVED" && last?.direction === "IN";
+  // Agradecimento no fim ("obrigado", "valeu", 👍) não precisa de resposta:
+  // não pinta de vermelho. "ok"/"certo" sim — pode ser resposta a uma pergunta.
+  const unanswered =
+    c.status !== "RESOLVED" && last?.direction === "IN" && closingKind(last.body, last.mediaType) !== "thanks";
   const since = unanswered ? waitingSince(c.messages) : null;
   const bar = c.status === "RESOLVED" ? STATE_BAR.resolved : unanswered ? STATE_BAR.unanswered : STATE_BAR.inProgress;
   const details = [

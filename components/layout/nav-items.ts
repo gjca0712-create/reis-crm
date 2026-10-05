@@ -39,3 +39,7 @@ export const NAV_ITEMS: NavItem[] = [
   { href: "/admin/avaliacoes", label: "Avaliações", icon: Star, feature: "avaliacoes" },
   { href: "/admin/auditoria", label: "Auditoria", icon: History, feature: "auditoria" },
 ];
+
+// Menu lateral recolhido (só ícones). Lido pelo layout no servidor, pra página
+// já abrir do jeito que a pessoa deixou, sem piscar aberto e depois fechar.
+export const SIDEBAR_COOKIE = "menu_recolhido";

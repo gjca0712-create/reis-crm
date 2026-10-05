@@ -3,6 +3,11 @@ import { normalizePhone, phoneVariants } from "@/lib/phone";
 import { formatPhone } from "@/lib/format";
 import type { WhatsAppLineId } from "./lines";
 import type { MediaCategory } from "./media";
+import { closingKind } from "./closing";
+
+// Até quanto tempo depois da última mensagem um "obrigado" ainda conta como
+// despedida da conversa resolvida (e não como assunto novo).
+const CLOSING_GRACE_MS = 24 * 60 * 60 * 1000;
 
 export type InboundMedia = {
   url: string;
@@ -187,8 +192,15 @@ async function processInboundWhatsAppMessageLocked(
     }
   }
 
+  // "Obrigado"/"ok" logo depois do Resolvido: entra no histórico da conversa
+  // resolvida sem reabrir (antes virava conversa nova em Em espera, vermelha).
+  const closingAfterResolved =
+    conversation?.status === "RESOLVED" &&
+    closingKind(text, media?.type) !== null &&
+    Date.now() - conversation.lastMessageAt.getTime() <= CLOSING_GRACE_MS;
+
   const target =
-    conversation && conversation.status !== "RESOLVED"
+    conversation && (conversation.status !== "RESOLVED" || closingAfterResolved)
       ? conversation
       : await prisma.conversation.create({
           data: { customerId: customer.id, line, status: "OPEN", lastMessageAt: new Date() },
@@ -209,7 +221,10 @@ async function processInboundWhatsAppMessageLocked(
         waSentAt,
       },
     }),
-    prisma.conversation.update({ where: { id: target.id }, data: { lastMessageAt: new Date(), status: "OPEN" } }),
+    prisma.conversation.update({
+      where: { id: target.id },
+      data: closingAfterResolved ? { lastMessageAt: new Date() } : { lastMessageAt: new Date(), status: "OPEN" },
+    }),
   ]);
 }
 
