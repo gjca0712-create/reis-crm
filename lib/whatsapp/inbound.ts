@@ -8,6 +8,8 @@ import { closingKind } from "./closing";
 // Até quanto tempo depois da última mensagem um "obrigado" ainda conta como
 // despedida da conversa resolvida (e não como assunto novo).
 const CLOSING_GRACE_MS = 24 * 60 * 60 * 1000;
+// Conversa com atendente parada há mais que isso volta pra fila quando o cliente escreve.
+const STALE_ASSIGNMENT_MS = 24 * 60 * 60 * 1000;
 
 export type InboundMedia = {
   url: string;
@@ -199,6 +201,16 @@ async function processInboundWhatsAppMessageLocked(
     closingKind(text, media?.type) !== null &&
     Date.now() - conversation.lastMessageAt.getTime() <= CLOSING_GRACE_MS;
 
+  // Cliente voltando a escrever numa conversa parada há mais de 24h que ainda
+  // está com um atendente (ninguém clicou em Resolvido): a conversa sai dele e
+  // volta pra Em espera do mesmo setor — quem estava com ela pode nem estar
+  // mais de turno. Agradecimento não precisa de resposta, então não solta.
+  const backToQueue =
+    conversation?.status === "OPEN" &&
+    conversation.assignedToId !== null &&
+    Date.now() - conversation.lastMessageAt.getTime() > STALE_ASSIGNMENT_MS &&
+    closingKind(text, media?.type) !== "thanks";
+
   const target =
     conversation && (conversation.status !== "RESOLVED" || closingAfterResolved)
       ? conversation
@@ -223,7 +235,9 @@ async function processInboundWhatsAppMessageLocked(
     }),
     prisma.conversation.update({
       where: { id: target.id },
-      data: closingAfterResolved ? { lastMessageAt: new Date() } : { lastMessageAt: new Date(), status: "OPEN" },
+      data: closingAfterResolved
+        ? { lastMessageAt: new Date() }
+        : { lastMessageAt: new Date(), status: "OPEN", ...(backToQueue && { assignedToId: null }) },
     }),
   ]);
 }

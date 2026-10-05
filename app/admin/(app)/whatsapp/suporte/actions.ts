@@ -15,6 +15,7 @@ import {
   type WaSendResult,
 } from "@/lib/whatsapp/client";
 import { sendWhatsAppMessage, sendWhatsAppMedia } from "@/lib/whatsapp/send";
+import { agentName, signAgentMessage } from "@/lib/whatsapp/signature";
 import { isWhatsAppLineId, toWhatsAppLineId } from "@/lib/whatsapp/lines";
 import {
   searchCustomersForChat,
@@ -164,6 +165,7 @@ export async function sendSupportReply(conversationId: string, formData: FormDat
 
   const line = toWhatsAppLineId(conversation.line);
   const phone = conversation.customer.phone;
+  const senderName = await agentName(session.userId);
 
   let result: WaSendResult;
   let mediaUrl: string | undefined;
@@ -179,15 +181,17 @@ export async function sendSupportReply(conversationId: string, formData: FormDat
     mediaMimeType = mimetype;
     mediaFileName = mediaFile.name || undefined;
 
-    // Responde SEMPRE pela mesma linha que recebeu a conversa.
+    // Responde SEMPRE pela mesma linha que recebeu a conversa. Foto/vídeo/
+    // documento sem texto levam só o nome na legenda; áudio sem texto vai sem
+    // (a legenda do áudio é uma mensagem separada — só o nome ficaria solto).
     result = await sendWhatsAppMedia(line, conversation.customer, {
       buffer,
       mimetype,
       fileName: mediaFileName,
-      caption: body || undefined,
+      caption: (body || mediaType !== "audio" ? signAgentMessage(senderName, body) : body) || undefined,
     });
   } else {
-    result = await sendWhatsAppMessage(line, conversation.customer, body);
+    result = await sendWhatsAppMessage(line, conversation.customer, signAgentMessage(senderName, body));
   }
   const sent = result.sent;
 
@@ -389,7 +393,8 @@ export async function editSupportMessage(
     toWhatsAppLineId(message.conversation.line),
     message.waCaptionMessageId ?? message.waMessageId!,
     message.waRemoteJid!,
-    newBody
+    // Mesma assinatura do envio, com o nome de quem mandou (não de quem edita).
+    signAgentMessage(await agentName(message.senderId), newBody)
   );
   if (!ok) return { aviso: "edicao-nao-enviada" };
 

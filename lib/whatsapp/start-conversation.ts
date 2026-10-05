@@ -5,6 +5,7 @@ import { checkWhatsAppNumber, isSendablePhone } from "./client";
 import { findCustomerByPhone, withPhoneLock } from "./inbound";
 import { isWhatsAppLineId, whatsappLineLabel } from "./lines";
 import { sendWhatsAppMessage } from "./send";
+import { agentName, signAgentMessage } from "./signature";
 
 // Iniciar conversa pelo CRM. Até aqui conversa só nascia quando o cliente
 // escrevia primeiro. "Nova conversa" (WhatsApp Suporte) manda a primeira
@@ -92,7 +93,11 @@ export async function startConversationAs(
       };
     }
 
-    const result = await sendWhatsAppMessage(line, { phone, whatsappLid: customer?.whatsappLid }, body);
+    const result = await sendWhatsAppMessage(
+      line,
+      { phone, whatsappLid: customer?.whatsappLid },
+      signAgentMessage(await agentName(userId), body)
+    );
     if (!result.sent) {
       return { error: `A mensagem não saiu pela ${whatsappLineLabel(line)}. Confira a conexão acima e tente de novo.` };
     }
