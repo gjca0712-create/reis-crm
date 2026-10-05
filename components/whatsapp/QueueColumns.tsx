@@ -5,6 +5,7 @@ import { formatListTime, formatPhone, formatWaitingTime } from "@/lib/format";
 import { whatsappLineLabel } from "@/lib/whatsapp/lines";
 import { sectorLabel } from "@/lib/whatsapp/sectors";
 import { closingKind } from "@/lib/whatsapp/closing";
+import { ContactAvatar } from "./ContactAvatar";
 import { QUEUE_SECTION_EMPTY, QUEUE_SECTION_LABELS, type QueueSection } from "@/lib/whatsapp/queue";
 
 // Listas com a cara do WhatsApp Web (cores wa-* no tailwind.config). O estado
@@ -45,7 +46,7 @@ export type QueueConversation = {
   line: string;
   sector: string | null;
   lastMessageAt: Date;
-  customer: { name: string; phone: string };
+  customer: { id: string; name: string; phone: string };
   rating: { score: number } | null;
   assignedTo: { id: string; name: string } | null;
   // Últimas mensagens (sem as apagadas), da mais nova pra mais velha: a
@@ -235,9 +236,7 @@ function QueueRow({
       }`}
     >
       <span className={`absolute left-0 top-2 bottom-2 w-[3px] rounded-r-full ${bar}`} />
-      <div className="w-11 h-11 rounded-full bg-[#6a7175]/40 flex items-center justify-center text-base font-medium text-wa-text shrink-0">
-        {c.customer.name.slice(0, 1).toUpperCase()}
-      </div>
+      <ContactAvatar customerId={c.customer.id} name={c.customer.name} className="w-11 h-11 text-base" />
       <div className="min-w-0 flex-1 border-b border-wa-border/70 pb-2.5 -mb-2.5">
         <div className="flex items-baseline justify-between gap-2">
           <span className={`text-[15px] text-wa-text truncate ${unanswered ? "font-semibold" : "font-normal"}`}>

@@ -2,7 +2,7 @@ import Link from "next/link";
 import { cookies } from "next/headers";
 import { MessageCircle, ExternalLink, CheckCircle2, AlertTriangle, Ban, ArrowRightLeft } from "lucide-react";
 import { prisma } from "@/lib/prisma";
-import { formatDayLabel, formatPhone, formatTime, whatsappLink } from "@/lib/format";
+import { formatDate, formatDayLabel, formatPhone, formatTime, whatsappLink } from "@/lib/format";
 import { getAllWhatsAppStates, ensureAllWhatsAppStarted } from "@/lib/whatsapp/client";
 import { whatsappLineLabel } from "@/lib/whatsapp/lines";
 import { sectorLabel } from "@/lib/whatsapp/sectors";
@@ -26,7 +26,9 @@ import { ChatImage } from "@/components/whatsapp/ChatImage";
 import { QueueColumns, QueueLegend } from "@/components/whatsapp/QueueColumns";
 import { NewConversationDialog } from "@/components/whatsapp/NewConversationDialog";
 import { TransferDialog } from "@/components/whatsapp/TransferDialog";
-import { requireFeature } from "@/lib/session";
+import { ContactInfo } from "@/components/whatsapp/ContactInfo";
+import { canAccess } from "@/lib/permissions";
+import { getSessionFeatures, requireFeature } from "@/lib/session";
 import {
   connectWhatsAppAction,
   disconnectWhatsAppAction,
@@ -69,6 +71,7 @@ export default async function WhatsappSuportePage({
   searchParams: Promise<{ c?: string; aviso?: string; novo?: string }>;
 }) {
   const session = await requireFeature("whatsapp_suporte");
+  const features = await getSessionFeatures(session);
   // Todo mundo vê a própria fila — em espera (do seu setor e da entrada geral)
   // + as que estão com a pessoa. CEO e Gerente ainda podem abrir/mexer em
   // qualquer conversa e trocar a coluna Em atendimento pra visão "Equipe" (ver
@@ -291,18 +294,26 @@ export default async function WhatsappSuportePage({
           {active ? (
             <>
               <div className="flex items-center justify-between gap-x-4 gap-y-2 px-4 py-2.5 bg-wa-panel flex-wrap">
-                <div className="flex items-center gap-3 min-w-0">
-                  <div className="w-10 h-10 rounded-full bg-[#6a7175]/40 flex items-center justify-center text-base font-medium text-wa-text shrink-0">
-                    {active.customer.name.slice(0, 1).toUpperCase()}
-                  </div>
-                  <div className="min-w-0">
-                    <div className="text-[15px] font-medium text-wa-text truncate">{active.customer.name}</div>
-                    <div className="text-xs text-wa-muted truncate">
-                      {formatPhone(active.customer.phone)} · {active.customer.bairro} · {whatsappLineLabel(active.line)}
-                      {active.sector && ` · ${sectorLabel(active.sector)}`}
-                    </div>
-                  </div>
-                </div>
+                <ContactInfo
+                  key={active.customer.id}
+                  canOpenCustomer={canAccess(features, "clientes")}
+                  contact={{
+                    id: active.customer.id,
+                    name: active.customer.name,
+                    phoneLabel: formatPhone(active.customer.phone),
+                    details: [
+                      formatPhone(active.customer.phone),
+                      active.customer.bairro,
+                      whatsappLineLabel(active.line),
+                      active.sector && sectorLabel(active.sector),
+                    ]
+                      .filter(Boolean)
+                      .join(" · "),
+                    bairro: active.customer.bairro,
+                    customerSince: formatDate(active.customer.createdAt),
+                    whatsappUrl: whatsappLink(active.customer.phone),
+                  }}
+                />
                 <div className="flex items-center gap-x-4 gap-y-2 flex-wrap">
                   {active.rating && <Badge status="good">{active.rating.score}★ avaliação</Badge>}
                   <Badge status={active.status === "OPEN" ? "good" : "neutral"}>

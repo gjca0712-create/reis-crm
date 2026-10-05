@@ -1029,3 +1029,69 @@ async function handleIncomingMessage(line: WhatsAppLineId, msg: any, sock: WASoc
     },
   });
 }
+
+// Foto de perfil e recado do contato — o que o WhatsApp mostra em "Dados do
+// contato". A foto é do número, não da conversa: serve qualquer linha conectada
+// (a da conversa primeiro). null = o contato não tem / esconde pela privacidade;
+// undefined = não deu pra perguntar (linha caída, timeout).
+function connectedSocket(preferred?: WhatsAppLineId): WASocket | null {
+  const order = preferred ? [preferred, ...WHATSAPP_LINE_IDS.filter((l) => l !== preferred)] : WHATSAPP_LINE_IDS;
+  for (const line of order) {
+    const r = runtimeFor(line);
+    if (r.socket && r.status === "connected") return r.socket;
+  }
+  return null;
+}
+
+async function contactJids(sock: WASocket, phone: string, lid?: string | null): Promise<string[]> {
+  const byLid = lid?.endsWith("@lid") ? lid : null;
+  return [await phoneJid(sock, phone), byLid].filter((jid): jid is string => Boolean(jid));
+}
+
+export async function fetchWhatsAppProfilePictureUrl(
+  phone: string,
+  lid: string | null,
+  size: "preview" | "image",
+  preferredLine?: WhatsAppLineId
+): Promise<string | null | undefined> {
+  const sock = connectedSocket(preferredLine);
+  if (!sock) return undefined;
+  let answered = false;
+  for (const jid of await contactJids(sock, phone, lid)) {
+    try {
+      const url = await sock.profilePictureUrl(jid, size, 8000);
+      answered = true;
+      if (url) return url;
+    } catch (err) {
+      // 401/403/404: sem foto ou escondida pela privacidade — é resposta, não
+      // falha. O Baileys põe o código do WhatsApp em `data` (statusCode do Boom
+      // fica no 500 genérico).
+      const code = Number((err as { data?: unknown })?.data);
+      if (code === 401 || code === 403 || code === 404) answered = true;
+    }
+  }
+  return answered ? null : undefined;
+}
+
+export async function fetchWhatsAppAbout(
+  phone: string,
+  lid: string | null,
+  preferredLine?: WhatsAppLineId
+): Promise<string | null | undefined> {
+  const sock = connectedSocket(preferredLine);
+  if (!sock) return undefined;
+  const jid = await phoneJid(sock, phone);
+  if (!jid && !lid) return null;
+  try {
+    const list = await Promise.race([
+      sock.fetchStatus(jid ?? lid!),
+      new Promise<undefined>((resolve) => setTimeout(() => resolve(undefined), 8000)),
+    ]);
+    if (!list) return undefined;
+    const status = (list[0] as { status?: { status?: string | null } } | undefined)?.status?.status;
+    return status?.trim() || null;
+  } catch (err) {
+    console.error("Erro ao buscar recado do contato no WhatsApp:", err);
+    return undefined;
+  }
+}
