@@ -11,6 +11,7 @@ export type Feature =
   | "bairros"
   | "whatsapp_suporte"
   | "whatsapp_campanhas"
+  | "whatsapp_gestao"
   | "atendentes"
   | "avaliacoes"
   | "ocorrencias"
@@ -29,6 +30,7 @@ export const FEATURE_LABELS: Record<Feature, string> = {
   bairros: "Bairros",
   whatsapp_suporte: "WhatsApp Suporte",
   whatsapp_campanhas: "WhatsApp Campanhas",
+  whatsapp_gestao: "WhatsApp: métricas e mensagens antigas",
   atendentes: "Atendentes (gestão de equipe)",
   avaliacoes: "Avaliações",
   ocorrencias: "Ocorrências",
@@ -44,8 +46,12 @@ export const FEATURE_LABELS: Record<Feature, string> = {
 // requireCeo() (checagem de role, não de feature).
 export const CEO_ONLY_FEATURES: Feature[] = ["atendentes", "auditoria"];
 
+// Métricas de atendimento e mensagens antigas do WhatsApp: sempre pra CEO e
+// Gerente, nunca pra mais ninguém (nem personalizando) — é supervisão da equipe.
+export const MANAGER_ONLY_FEATURES: Feature[] = ["whatsapp_gestao"];
+
 export const CUSTOMIZABLE_FEATURES: Feature[] = (Object.keys(FEATURE_LABELS) as Feature[]).filter(
-  (f) => !CEO_ONLY_FEATURES.includes(f)
+  (f) => !CEO_ONLY_FEATURES.includes(f) && !MANAGER_ONLY_FEATURES.includes(f)
 );
 
 // Números do ERP (faturamento, margem, contas a pagar/receber, custo) só pra
@@ -114,11 +120,11 @@ export function resolveFeatures(role: Role, overrides: unknown): Feature[] {
   if (role === "CEO") {
     // Financeiro/Produtos também sempre: telas novas não apareceriam pra um
     // CEO que já tivesse lista personalizada salva de antes delas existirem.
-    return Array.from(new Set([...base, ...CEO_ONLY_FEATURES, ...MANAGEMENT_FEATURES]));
+    return Array.from(new Set([...base, ...CEO_ONLY_FEATURES, ...MANAGEMENT_FEATURES, ...MANAGER_ONLY_FEATURES]));
   }
-  const withoutCeoOnly = base.filter((f) => !CEO_ONLY_FEATURES.includes(f));
+  const withoutCeoOnly = base.filter((f) => !CEO_ONLY_FEATURES.includes(f) && !MANAGER_ONLY_FEATURES.includes(f));
   return MANAGEMENT_ROLES.includes(role)
-    ? withoutCeoOnly
+    ? [...withoutCeoOnly, ...MANAGER_ONLY_FEATURES]
     : withoutCeoOnly.filter((f) => !MANAGEMENT_FEATURES.includes(f));
 }
 

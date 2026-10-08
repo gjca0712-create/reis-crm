@@ -1,6 +1,7 @@
-import type { Prisma } from "@prisma/client";
+import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { canManageQueue } from "./message-permissions";
+import { needsReply } from "./closing";
 
 // Fila de atendimento do WhatsApp Suporte (whatsapp/suporte/page.tsx). Cada
 // usuário vê a própria fila: quem está esperando alguém assumir e as conversas
@@ -127,4 +128,56 @@ export async function firstInQueue(viewer: Viewer, view: QueueView = "mine", ski
     select: { id: true, status: true, assignedToId: true, sector: true },
   });
   return groupByQueueSection(open, viewer, view).flatMap((s) => s.conversations)[0]?.id ?? null;
+}
+
+// Aba "Sem resposta +4h": clientes esperando resposta há mais de 4 horas,
+// estejam em espera ou já com alguém — o mais antigo primeiro. A escolha da aba
+// fica num cookie (igual ao Meus/Equipe), pra sobreviver ao Resolvido/próxima.
+export const OVERDUE_MS = 4 * 60 * 60_000;
+export type QueueTab = "fila" | "atrasadas";
+export const QUEUE_TAB_COOKIE = "wa_suporte_aba";
+
+export function parseQueueTab(value: string | undefined): QueueTab {
+  return value === "atrasadas" ? "atrasadas" : "fila";
+}
+
+// Desde quando cada conversa espera resposta: a primeira mensagem do cliente
+// depois da nossa última (apagada pra todos não conta). Calculado no banco —
+// a lista só carrega as 10 últimas mensagens, e quem mandou mais que isso
+// seguido estaria esperando há mais tempo do que elas mostram.
+export async function unansweredSince(conversationIds: string[]): Promise<Map<string, Date>> {
+  if (conversationIds.length === 0) return new Map();
+  const rows = await prisma.$queryRaw<{ id: string; since: Date }[]>`
+    SELECT m."conversationId" AS id, MIN(m."createdAt") AS since
+    FROM "Message" m
+    WHERE m."conversationId" IN (${Prisma.join(conversationIds)})
+      AND m.direction = 'IN'
+      AND m."deletedAt" IS NULL
+      AND m."createdAt" > COALESCE(
+        (SELECT MAX(o."createdAt") FROM "Message" o
+          WHERE o."conversationId" = m."conversationId" AND o.direction = 'OUT' AND o."deletedAt" IS NULL),
+        to_timestamp(0)
+      )
+    GROUP BY m."conversationId"
+  `;
+  return new Map(rows.map((r) => [r.id, r.since]));
+}
+
+type WithMessages = {
+  id: string;
+  status: string;
+  messages: { direction: string; body: string | null; mediaType?: string | null }[];
+};
+
+// Põe waitingSince (desde quando espera resposta, ou null) em cada conversa.
+export async function withWaitingSince<T extends WithMessages>(conversations: T[]): Promise<(T & { waitingSince: Date | null })[]> {
+  const waiting = conversations.filter((c) => c.status !== "RESOLVED" && needsReply(c.messages[0]));
+  const since = await unansweredSince(waiting.map((c) => c.id));
+  return conversations.map((c) => ({ ...c, waitingSince: since.get(c.id) ?? null }));
+}
+
+export function overdueConversations<T extends { waitingSince: Date | null }>(conversations: T[], now: Date): T[] {
+  return conversations
+    .filter((c) => c.waitingSince && now.getTime() - c.waitingSince.getTime() >= OVERDUE_MS)
+    .sort((a, b) => a.waitingSince!.getTime() - b.waitingSince!.getTime());
 }

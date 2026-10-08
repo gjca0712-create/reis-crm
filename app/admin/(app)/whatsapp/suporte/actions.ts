@@ -31,11 +31,14 @@ import {
 } from "@/lib/whatsapp/message-permissions";
 import { RATING_PROMPT, isRatingPrompt, stopWaitingForRating, removeAudioCaption } from "@/lib/whatsapp/inbound";
 import {
+  QUEUE_TAB_COOKIE,
   QUEUE_VIEW_COOKIE,
   firstInQueue,
   loadQueueViewer,
+  parseQueueTab,
   parseQueueView,
   queueBlockReason,
+  type QueueTab,
   type QueueView,
   type QueueViewer,
 } from "@/lib/whatsapp/queue";
@@ -97,6 +100,19 @@ export async function claimConversation(conversationId: string) {
 export async function setSupportView(view: QueueView) {
   await requireFeature("whatsapp_suporte");
   (await cookies()).set(QUEUE_VIEW_COOKIE, parseQueueView(view), {
+    path: "/admin/whatsapp",
+    httpOnly: true,
+    sameSite: "lax",
+    maxAge: 60 * 60 * 24 * 365,
+  });
+  revalidatePath("/admin/whatsapp/suporte");
+}
+
+// Primeira coluna: "Em espera" (fila) ou "Sem resposta +4h". Em cookie, igual
+// ao Meus/Equipe, pra continuar na aba depois de responder/concluir.
+export async function setSupportTab(tab: QueueTab) {
+  await requireFeature("whatsapp_suporte");
+  (await cookies()).set(QUEUE_TAB_COOKIE, parseQueueTab(tab), {
     path: "/admin/whatsapp",
     httpOnly: true,
     sameSite: "lax",
@@ -310,7 +326,13 @@ export async function resolveConversation(conversationId: string) {
       // pedido realmente saiu — senão o cliente responde outra coisa e vira 1-5 sem contexto.
       // Solta a atribuição: resolvida sai da fila de todo mundo e vira
       // histórico (quem atendeu continua registrado em resolvedById).
-      data: { status: "RESOLVED", resolvedById: session.userId, ratingRequested: sent, assignedToId: null },
+      data: {
+        status: "RESOLVED",
+        resolvedById: session.userId,
+        resolvedAt: new Date(),
+        ratingRequested: sent,
+        assignedToId: null,
+      },
     }),
     ...(sent
       ? [

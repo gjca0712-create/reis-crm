@@ -4,9 +4,9 @@ import { ChevronDown, Camera, Video, Mic, FileText } from "lucide-react";
 import { formatListTime, formatPhone, formatWaitingTime } from "@/lib/format";
 import { whatsappLineLabel } from "@/lib/whatsapp/lines";
 import { sectorLabel } from "@/lib/whatsapp/sectors";
-import { closingKind } from "@/lib/whatsapp/closing";
+import { needsReply } from "@/lib/whatsapp/closing";
 import { ContactAvatar } from "./ContactAvatar";
-import { QUEUE_SECTION_EMPTY, QUEUE_SECTION_LABELS, type QueueSection } from "@/lib/whatsapp/queue";
+import { OVERDUE_MS, QUEUE_SECTION_EMPTY, QUEUE_SECTION_LABELS, type QueueSection } from "@/lib/whatsapp/queue";
 
 // Listas com a cara do WhatsApp Web (cores wa-* no tailwind.config). O estado
 // de cada conversa fica numa faixa fina à esquerda, pra identificar de relance:
@@ -53,6 +53,9 @@ export type QueueConversation = {
   // primeira dá a prévia e se o cliente falou por último (IN = sem resposta);
   // a sequência de IN no começo dá desde quando ele espera.
   messages: ListMessage[];
+  // Desde quando espera resposta, calculado no banco (withWaitingSince) — sem
+  // ele, usa a sequência de IN das mensagens carregadas.
+  waitingSince?: Date | null;
 };
 
 type Sections<T> = { section: QueueSection; conversations: T[] }[];
@@ -63,16 +66,24 @@ type Sections<T> = { section: QueueSection; conversations: T[] }[];
 // currentToolbar: faixa logo abaixo do título de Em atendimento (a chave
 // Meus/Equipe da página). Devolve as duas colunas soltas — quem posiciona é o
 // grid da página.
+// overdue + showOverdue: a primeira coluna vira "Sem resposta há +4h" (aba da
+// página); waitingToolbar é a faixa com as abas, logo abaixo do título dela.
 export function QueueColumns<T extends QueueConversation>({
   sections,
   activeId,
   userId,
   currentToolbar,
+  waitingToolbar,
+  overdue = [],
+  showOverdue = false,
 }: {
   sections: Sections<T>;
   activeId: string | undefined;
   userId: string;
   currentToolbar?: ReactNode;
+  waitingToolbar?: ReactNode;
+  overdue?: T[];
+  showOverdue?: boolean;
 }) {
   const now = new Date();
   const waiting = sections.find((s) => s.section === "waiting")?.conversations ?? [];
@@ -81,15 +92,33 @@ export function QueueColumns<T extends QueueConversation>({
   // Atendente só tem "Com você" nessa coluna: o título já diz, sem subtítulo.
   const onlyMine = current.length === 1 && current[0].section === "mine";
 
-  const row = (c: T) => <QueueRow key={c.id} conversation={c} active={c.id === activeId} userId={userId} now={now} />;
-  const rowsOrEmpty = (rows: T[], empty: string | undefined) =>
-    rows.length > 0 ? rows.map(row) : empty ? <p className="px-4 py-3 text-xs text-wa-muted">{empty}</p> : null;
+  const row = (c: T, showOwner = false) => (
+    <QueueRow key={c.id} conversation={c} active={c.id === activeId} userId={userId} now={now} showOwner={showOwner} />
+  );
+  const rowsOrEmpty = (rows: T[], empty: string | undefined, showOwner = false) =>
+    rows.length > 0 ? (
+      rows.map((c) => row(c, showOwner))
+    ) : empty ? (
+      <p className="px-4 py-3 text-xs text-wa-muted">{empty}</p>
+    ) : null;
 
   return (
     <>
-      <QueueColumn title="Em espera" count={waiting.length} alert={waiting.length > 0}>
-        {rowsOrEmpty(waiting, QUEUE_SECTION_EMPTY.waiting)}
-      </QueueColumn>
+      {showOverdue ? (
+        <QueueColumn
+          title="Sem resposta há +4h"
+          count={overdue.length}
+          alert={overdue.length > 0}
+          tone="critical"
+          toolbar={waitingToolbar}
+        >
+          {rowsOrEmpty(overdue, "Nenhum cliente esperando resposta há mais de 4 horas.", true)}
+        </QueueColumn>
+      ) : (
+        <QueueColumn title="Em espera" count={waiting.length} alert={waiting.length > 0} toolbar={waitingToolbar}>
+          {rowsOrEmpty(waiting, QUEUE_SECTION_EMPTY.waiting)}
+        </QueueColumn>
+      )}
 
       <QueueColumn title="Em atendimento" count={inProgress} toolbar={currentToolbar}>
         {onlyMine
@@ -139,12 +168,14 @@ function QueueColumn({
   title,
   count,
   alert = false,
+  tone = "green",
   toolbar,
   children,
 }: {
   title: string;
   count: number;
   alert?: boolean;
+  tone?: "green" | "critical";
   toolbar?: ReactNode;
   children: ReactNode;
 }) {
@@ -154,7 +185,7 @@ function QueueColumn({
         <h2 className="text-[15px] font-medium text-wa-text">{title}</h2>
         <span
           className={`min-w-[22px] rounded-full px-1.5 text-center text-xs font-semibold leading-[22px] ${
-            alert ? "bg-wa-green text-wa-bg" : "bg-wa-active text-wa-muted"
+            alert ? (tone === "critical" ? "bg-[rgb(244,63,94)] text-white" : "bg-wa-green text-wa-bg") : "bg-wa-active text-wa-muted"
           }`}
         >
           {count}
@@ -202,29 +233,39 @@ function waitingSince(messages: ListMessage[]): Date | null {
 // Uma linha da lista, no formato do WhatsApp: foto (inicial), nome e hora da
 // última mensagem em cima, prévia embaixo. Sem resposta: nome em negrito, hora
 // verde e o tempo de espera no lugar do contador de não lidas.
+// showOwner: na aba +4h a coluna não diz de quem é a conversa — a linha diz
+// (Com você / Em espera / Com colega).
 function QueueRow({
   conversation: c,
   active,
   userId,
   now,
+  showOwner = false,
 }: {
   conversation: QueueConversation;
   active: boolean;
   userId: string;
   now: Date;
+  showOwner?: boolean;
 }) {
   const last = c.messages[0];
   // Agradecimento no fim ("obrigado", "valeu", 👍) não precisa de resposta:
   // não pinta de vermelho. "ok"/"certo" sim — pode ser resposta a uma pergunta.
-  const unanswered =
-    c.status !== "RESOLVED" && last?.direction === "IN" && closingKind(last.body, last.mediaType) !== "thanks";
-  const since = unanswered ? waitingSince(c.messages) : null;
+  const unanswered = c.status !== "RESOLVED" && needsReply(last);
+  const since = unanswered ? (c.waitingSince ?? waitingSince(c.messages)) : null;
+  const overdue = since !== null && now.getTime() - since.getTime() >= OVERDUE_MS;
   const bar = c.status === "RESOLVED" ? STATE_BAR.resolved : unanswered ? STATE_BAR.unanswered : STATE_BAR.inProgress;
   const details = [
     whatsappLineLabel(c.line),
     c.sector && sectorLabel(c.sector),
-    // Com você já é a coluna; aqui só quando é de um colega.
-    c.assignedTo && c.assignedTo.id !== userId && `Com ${c.assignedTo.name}`,
+    // Com você já é a coluna; aqui só quando é de um colega (ou na aba +4h).
+    showOwner
+      ? c.assignedTo
+        ? c.assignedTo.id === userId
+          ? "Com você"
+          : `Com ${c.assignedTo.name}`
+        : "Em espera"
+      : c.assignedTo && c.assignedTo.id !== userId && `Com ${c.assignedTo.name}`,
     c.rating && `${c.rating.score}★`,
   ].filter(Boolean);
 
@@ -252,8 +293,10 @@ function QueueRow({
           </span>
           {since && (
             <span
-              className="shrink-0 rounded-full bg-wa-green px-1.5 text-[11px] font-semibold leading-[18px] text-wa-bg"
-              title="Tempo esperando resposta"
+              className={`shrink-0 rounded-full px-1.5 text-[11px] font-semibold leading-[18px] ${
+                overdue ? "bg-[rgb(244,63,94)] text-white" : "bg-wa-green text-wa-bg"
+              }`}
+              title={overdue ? "Esperando resposta há mais de 4 horas" : "Tempo esperando resposta"}
             >
               {formatWaitingTime(since, now)}
             </span>

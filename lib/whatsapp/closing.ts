@@ -62,3 +62,9 @@ export function closingKind(body: string | null | undefined, mediaType?: string 
   if (words.every((w) => FILLER.has(w))) return null;
   return "ack";
 }
+
+// Conversa esperando resposta nossa: o cliente falou por último, e não foi só
+// um agradecimento. Mesma regra da faixa vermelha da lista e da aba +4h.
+export function needsReply(last: { direction: string; body: string | null; mediaType?: string | null } | undefined): boolean {
+  return last?.direction === "IN" && closingKind(last.body, last.mediaType) !== "thanks";
+}

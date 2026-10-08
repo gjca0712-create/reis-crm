@@ -169,6 +169,8 @@ model Conversation {
   resolvedById    String?
   resolvedBy      User?    @relation("ResolvedConversations", fields: [resolvedById], references: [id])
   ratingRequested Boolean  @default(false)
+  // Quando foi marcada como resolvida (métricas e Mensagens antigas).
+  resolvedAt      DateTime?
 
   // Atendente que "assumiu" essa conversa (fila de atendimento). Enquanto
   // atribuída, some da lista de quem não é CEO/Gerente nem o próprio dono —

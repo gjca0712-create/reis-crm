@@ -1,28 +1,32 @@
 import Link from "next/link";
 import { cookies } from "next/headers";
-import { MessageCircle, ExternalLink, CheckCircle2, AlertTriangle, Ban, ArrowRightLeft } from "lucide-react";
+import { MessageCircle, ExternalLink, CheckCircle2, AlertTriangle } from "lucide-react";
 import { prisma } from "@/lib/prisma";
-import { formatDate, formatDayLabel, formatPhone, formatTime, whatsappLink } from "@/lib/format";
+import { formatDate, formatPhone, whatsappLink } from "@/lib/format";
 import { getAllWhatsAppStates, ensureAllWhatsAppStarted } from "@/lib/whatsapp/client";
 import { whatsappLineLabel } from "@/lib/whatsapp/lines";
 import { sectorLabel } from "@/lib/whatsapp/sectors";
 import { qrToDataUrl } from "@/lib/whatsapp/qr";
 import { canManageQueue as managesQueue, sentMessagePermissions } from "@/lib/whatsapp/message-permissions";
 import {
+  QUEUE_TAB_COOKIE,
   QUEUE_VIEW_COOKIE,
   groupByQueueSection,
   loadQueueViewer,
+  overdueConversations,
+  parseQueueTab,
   parseQueueView,
   queueBlockReason,
   queueListWhere,
   seesWholeTeam,
+  withWaitingSince,
 } from "@/lib/whatsapp/queue";
 import { Card } from "@/components/ui/Card";
 import { Badge } from "@/components/ui/Badge";
 import { AutoRefresh } from "@/components/whatsapp/AutoRefresh";
 import { ReplyForm } from "@/components/whatsapp/ReplyForm";
 import { MessageActions } from "@/components/whatsapp/MessageActions";
-import { ChatImage } from "@/components/whatsapp/ChatImage";
+import { ChatTimeline, CHAT_WALLPAPER } from "@/components/whatsapp/ChatTimeline";
 import { QueueColumns, QueueLegend } from "@/components/whatsapp/QueueColumns";
 import { NewConversationDialog } from "@/components/whatsapp/NewConversationDialog";
 import { TransferDialog } from "@/components/whatsapp/TransferDialog";
@@ -40,6 +44,7 @@ import {
   editSupportMessage,
   deleteSupportMessage,
   setSupportView,
+  setSupportTab,
   transferConversation,
 } from "./actions";
 
@@ -59,12 +64,6 @@ const AVISOS: Record<string, string> = {
     "Essa conversa foi transferida para outro setor — sua ação não foi aplicada (a resposta não foi enviada).",
 };
 
-// Anexo de uma mensagem apagada: a mídia sai da conversa, fica só a menção.
-const MEDIA_LABELS: Record<string, string> = { image: "foto", video: "vídeo", audio: "áudio", document: "documento" };
-
-// Fundo da conversa: pontinhos bem fracos, no lugar do papel de parede do WhatsApp.
-const CHAT_WALLPAPER = "bg-[radial-gradient(rgba(255,255,255,0.035)_1px,transparent_1px)] [background-size:18px_18px]";
-
 export default async function WhatsappSuportePage({
   searchParams,
 }: {
@@ -78,7 +77,9 @@ export default async function WhatsappSuportePage({
   // lib/whatsapp/queue.ts).
   const canManageQueue = managesQueue(session.role);
   const viewer = await loadQueueViewer(session);
-  const view = parseQueueView((await cookies()).get(QUEUE_VIEW_COOKIE)?.value);
+  const cookieStore = await cookies();
+  const view = parseQueueView(cookieStore.get(QUEUE_VIEW_COOKIE)?.value);
+  const tab = parseQueueTab(cookieStore.get(QUEUE_TAB_COOKIE)?.value);
   const teamView = seesWholeTeam(viewer, view);
 
   const params = await searchParams;
@@ -122,11 +123,15 @@ export default async function WhatsappSuportePage({
     },
   });
 
-  const sections = groupByQueueSection(conversations, viewer, view);
-  // Sem ?c=, abre a primeira da fila — nunca uma finalizada (igual ao
-  // firstInQueue, pra onde vai quem acabou de concluir um atendimento).
-  const activeId =
-    params.c ?? sections.filter((s) => s.section !== "resolved").flatMap((s) => s.conversations)[0]?.id;
+  const now = new Date();
+  const sections = groupByQueueSection(await withWaitingSince(conversations), viewer, view);
+  const open = sections.filter((s) => s.section !== "resolved").flatMap((s) => s.conversations);
+  // Aba "Sem resposta +4h": das que a pessoa vê (espera + as dela; Equipe:
+  // todas), as que esperam resposta há mais de 4h — o contador aparece sempre.
+  const overdue = overdueConversations(open, now);
+  // Sem ?c=, abre a primeira da fila (ou da aba +4h) — nunca uma finalizada
+  // (igual ao firstInQueue, pra onde vai quem acabou de concluir um atendimento).
+  const activeId = params.c ?? (tab === "atrasadas" ? overdue[0]?.id : undefined) ?? open[0]?.id;
   const activeRaw = activeId
     ? await prisma.conversation.findUnique({
         where: { id: activeId },
@@ -144,15 +149,6 @@ export default async function WhatsappSuportePage({
   // direto com o id) uma conversa assumida por outro atendente ou que está na
   // espera de outro setor.
   const active = activeRaw && queueBlockReason(viewer, activeRaw) ? null : activeRaw;
-
-  // Mensagens e transferências na ordem em que aconteceram.
-  const timeline = active
-    ? [
-        ...active.messages.map((m) => ({ kind: "message" as const, at: m.createdAt, m })),
-        ...active.transfers.map((t) => ({ kind: "transfer" as const, at: t.createdAt, t })),
-      ].sort((a, b) => a.at.getTime() - b.at.getTime())
-    : [];
-  const now = new Date();
 
   return (
     <div className="space-y-4">
@@ -268,6 +264,30 @@ export default async function WhatsappSuportePage({
             sections={sections}
             activeId={activeId}
             userId={session.userId}
+            overdue={overdue}
+            showOverdue={tab === "atrasadas"}
+            waitingToolbar={
+              <div className="flex gap-1 px-3 py-2 border-b border-wa-border bg-wa-list">
+                {(["fila", "atrasadas"] as const).map((t) => (
+                  <form key={t} action={setSupportTab.bind(null, t)} className="flex-1">
+                    <button
+                      type="submit"
+                      aria-pressed={tab === t}
+                      className={`w-full inline-flex items-center justify-center gap-1.5 rounded-full px-2 py-1 text-xs font-medium transition-colors ${
+                        tab === t ? "bg-wa-green/20 text-wa-green" : "bg-wa-panel text-wa-muted hover:text-wa-text"
+                      }`}
+                    >
+                      {t === "fila" ? "Em espera" : "Sem resposta +4h"}
+                      {t === "atrasadas" && overdue.length > 0 && (
+                        <span className="min-w-[18px] rounded-full bg-[rgb(244,63,94)] px-1 text-[11px] font-semibold leading-[18px] text-white">
+                          {overdue.length}
+                        </span>
+                      )}
+                    </button>
+                  </form>
+                ))}
+              </div>
+            }
             currentToolbar={
               canManageQueue ? (
                 <div className="flex gap-1 px-3 py-2 border-b border-wa-border bg-wa-list">
@@ -378,155 +398,26 @@ export default async function WhatsappSuportePage({
               {/* flex-col-reverse: a rolagem já começa no fim (mensagem mais
                   nova), e a atualização automática não pula pro topo. */}
               <div className={`flex-1 overflow-y-auto flex flex-col-reverse px-4 sm:px-[6%] py-3 ${CHAT_WALLPAPER}`}>
-                <div className="space-y-1.5">
-                  {timeline.map((item, i) => {
-                    // Separador de dia ("Hoje", "Ontem", data) quando o dia muda.
-                    const dayLabel = formatDayLabel(item.at, now);
-                    const showDay = i === 0 || formatDayLabel(timeline[i - 1].at, now) !== dayLabel;
-                    const daySeparator = showDay && (
-                      <div className="flex justify-center py-1.5">
-                        <span className="rounded-lg bg-wa-note px-3 py-1 text-[12.5px] text-wa-muted shadow-sm">
-                          {dayLabel}
-                        </span>
-                      </div>
-                    );
-
-                    if (item.kind === "transfer") {
-                      const t = item.t;
-                      return (
-                        <div key={`t-${t.id}`}>
-                          {daySeparator}
-                          <div className="flex justify-center py-1">
-                            <div className="max-w-[85%] rounded-lg bg-wa-note px-3 py-2 text-center text-[12.5px] shadow-sm">
-                              <p className="flex items-center justify-center gap-1.5 text-[#ffd279]">
-                                <ArrowRightLeft className="w-3.5 h-3.5 shrink-0" />
-                                {t.byUser.name} transferiu de {sectorLabel(t.fromSector)} para {sectorLabel(t.toSector)} ·{" "}
-                                {formatTime(t.createdAt)}
-                              </p>
-                              <p className="mt-1 text-wa-text whitespace-pre-wrap">Motivo: {t.reason}</p>
-                            </div>
-                          </div>
-                        </div>
-                      );
-                    }
-
-                    const m = item.m;
-                    const out = m.direction === "OUT";
-                    const senderLabel = m.sender ? m.sender.name : "Respondido pelo celular";
-
-                    // Apagada pra todos (pelo CRM, pelo celular ou pelo cliente):
-                    // igual o WhatsApp mostra o aviso no lugar, mas a equipe ainda
-                    // enxerga o que era, riscado — é histórico do atendimento.
-                    if (m.deletedAt) {
-                      const who = !out ? "pelo cliente" : m.deletedByName ? `por ${m.deletedByName}` : "pelo celular";
-                      const mediaLabel = m.mediaType ? (MEDIA_LABELS[m.mediaType] ?? "anexo") : null;
-                      // Legenda de áudio apagada antes (body vazio): o texto ficou em originalBody.
-                      const deletedText = m.body || m.originalBody;
-                      return (
-                        <div key={m.id}>
-                          {daySeparator}
-                          <div className={`flex flex-col ${out ? "items-end" : "items-start"}`}>
-                            <div
-                              className={`max-w-[75%] rounded-lg px-2.5 py-1.5 text-sm text-wa-muted shadow-sm ${
-                                out ? "bg-wa-out/60 rounded-tr-none" : "bg-wa-panel/70 rounded-tl-none"
-                              }`}
-                            >
-                              <p className="flex items-center gap-1.5 italic">
-                                <Ban className="w-3.5 h-3.5 shrink-0" /> Mensagem apagada {who}
-                              </p>
-                              {(deletedText || mediaLabel) && (
-                                <p className="mt-1 text-xs line-through opacity-70 whitespace-pre-wrap">
-                                  {mediaLabel && `[${mediaLabel}${m.mediaFileName ? `: ${m.mediaFileName}` : ""}] `}
-                                  {deletedText}
-                                </p>
-                              )}
-                              <p className="text-[11px] mt-1 text-right">
-                                {formatTime(m.createdAt)} · apagada {formatDayLabel(m.deletedAt, now).toLowerCase()} às{" "}
-                                {formatTime(m.deletedAt)}
-                              </p>
-                            </div>
-                            {out && <span className="text-[10px] text-wa-muted mt-0.5 mr-1">{senderLabel}</span>}
-                          </div>
-                        </div>
-                      );
-                    }
-
-                    const rules = out ? sentMessagePermissions(m, session) : null;
-                    const showActions = Boolean(rules && (rules.canEdit || rules.canDelete));
-                    // Hora dentro do balão, no canto de baixo, igual o WhatsApp: a
-                    // cópia invisível reserva o espaço no fim do texto.
-                    const meta = `${m.editedAt ? "editada · " : ""}${formatTime(m.createdAt)}`;
-
+                <ChatTimeline
+                  messages={active.messages}
+                  transfers={active.transfers}
+                  now={now}
+                  actionsFor={(m, senderLabel) => {
+                    const rules = sentMessagePermissions(m, session);
+                    if (!rules.canEdit && !rules.canDelete) return null;
                     return (
-                      <div key={m.id}>
-                        {daySeparator}
-                        <div className={`group flex flex-col ${out ? "items-end" : "items-start"}`}>
-                          <div
-                            className={`relative max-w-[75%] rounded-lg px-2.5 pt-1.5 pb-2 text-[14.2px] leading-[19px] text-wa-text shadow-sm ${
-                              out ? "bg-wa-out rounded-tr-none" : "bg-wa-panel rounded-tl-none"
-                            }`}
-                            title={m.originalBody ? `Antes da edição: ${m.originalBody}` : undefined}
-                          >
-                            {m.mediaUrl && m.mediaType === "image" && (
-                              <ChatImage
-                                src={`/api/whatsapp/media/${m.mediaUrl}`}
-                                alt={m.mediaFileName ?? "Imagem"}
-                                fileName={m.mediaFileName}
-                              />
-                            )}
-                            {m.mediaUrl && m.mediaType === "video" && (
-                              <video
-                                src={`/api/whatsapp/media/${m.mediaUrl}`}
-                                controls
-                                className="rounded-lg max-w-full max-h-64 mb-1.5"
-                              />
-                            )}
-                            {m.mediaUrl && m.mediaType === "audio" && (
-                              <audio src={`/api/whatsapp/media/${m.mediaUrl}`} controls className="w-60 max-w-full mb-1.5" />
-                            )}
-                            {m.mediaUrl && m.mediaType === "document" && (
-                              <a
-                                href={`/api/whatsapp/media/${m.mediaUrl}`}
-                                target="_blank"
-                                rel="noopener noreferrer"
-                                className="flex items-center gap-1.5 underline text-xs mb-1.5 opacity-90"
-                              >
-                                📎 {m.mediaFileName ?? "Abrir arquivo"}
-                              </a>
-                            )}
-                            {m.body && <span className="whitespace-pre-wrap break-words">{m.body}</span>}
-                            <span className="invisible inline-block pl-3 text-[11px]" aria-hidden>
-                              {meta}
-                            </span>
-                            <span
-                              className={`absolute bottom-1 right-2 text-[11px] leading-none ${
-                                out ? "text-white/60" : "text-wa-muted"
-                              }`}
-                            >
-                              {meta}
-                            </span>
-                          </div>
-                          {showActions ? (
-                            <MessageActions
-                              // Remonta depois de uma edição salva: fecha a caixa e
-                              // pega o texto novo.
-                              key={m.editedAt?.getTime() ?? 0}
-                              senderLabel={senderLabel}
-                              text={m.body}
-                              editAction={rules?.canEdit ? editSupportMessage.bind(null, m.id) : undefined}
-                              deleteAction={rules?.canDelete ? deleteSupportMessage.bind(null, m.id) : undefined}
-                            />
-                          ) : (
-                            out && <span className="text-[10px] text-wa-muted mt-0.5 mr-1">{senderLabel}</span>
-                          )}
-                        </div>
-                      </div>
+                      <MessageActions
+                        // Remonta depois de uma edição salva: fecha a caixa e
+                        // pega o texto novo.
+                        key={m.editedAt?.getTime() ?? 0}
+                        senderLabel={senderLabel}
+                        text={m.body}
+                        editAction={rules.canEdit ? editSupportMessage.bind(null, m.id) : undefined}
+                        deleteAction={rules.canDelete ? deleteSupportMessage.bind(null, m.id) : undefined}
+                      />
                     );
-                  })}
-                  {timeline.length === 0 && (
-                    <p className="text-center text-sm text-wa-muted py-6">Nenhuma mensagem ainda.</p>
-                  )}
-                </div>
+                  }}
+                />
               </div>
 
               <ReplyForm
