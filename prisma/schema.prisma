@@ -155,6 +155,9 @@ model CashbackTransaction {
 
 model Conversation {
   id            String   @id @default(cuid())
+  // Número do atendimento pra equipe falar ("atendimento #1234"), em ordem de
+  // abertura — aparece em Mensagens antigas e dá pra buscar por ele.
+  number        Int      @unique @default(autoincrement())
   customerId    String
   customer      Customer @relation(fields: [customerId], references: [id])
   status        String   @default("OPEN")
