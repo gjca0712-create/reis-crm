@@ -1,11 +1,11 @@
 import Link from "next/link";
 import { cookies } from "next/headers";
-import { MessageCircle, ExternalLink, CheckCircle2, AlertTriangle } from "lucide-react";
+import { MessageCircle, ExternalLink, CheckCircle2, AlertTriangle, MessageSquarePlus, MessagesSquare } from "lucide-react";
 import { prisma } from "@/lib/prisma";
-import { formatDate, formatPhone, whatsappLink } from "@/lib/format";
+import { formatDate, formatDateTime, formatPhone, whatsappLink } from "@/lib/format";
 import { getAllWhatsAppStates, ensureAllWhatsAppStarted } from "@/lib/whatsapp/client";
-import { whatsappLineLabel } from "@/lib/whatsapp/lines";
-import { sectorLabel } from "@/lib/whatsapp/sectors";
+import { WHATSAPP_LINES, whatsappLineLabel } from "@/lib/whatsapp/lines";
+import { SECTORS, sectorLabel } from "@/lib/whatsapp/sectors";
 import { qrToDataUrl } from "@/lib/whatsapp/qr";
 import { canManageQueue as managesQueue, sentMessagePermissions } from "@/lib/whatsapp/message-permissions";
 import {
@@ -21,6 +21,18 @@ import {
   seesWholeTeam,
   withWaitingSince,
 } from "@/lib/whatsapp/queue";
+import {
+  NO_SECTOR,
+  SUPPORT_FILTERS_COOKIE,
+  effectiveSupportFilters,
+  hasFilterParams,
+  parseSupportFilters,
+  parseSupportFiltersCookie,
+  sortQueue,
+  supportFilterWhere,
+  supportOrderBy,
+  type SupportFilterParams,
+} from "@/lib/whatsapp/filters";
 import { Card } from "@/components/ui/Card";
 import { Badge } from "@/components/ui/Badge";
 import { AutoRefresh } from "@/components/whatsapp/AutoRefresh";
@@ -28,6 +40,8 @@ import { ReplyForm } from "@/components/whatsapp/ReplyForm";
 import { MessageActions } from "@/components/whatsapp/MessageActions";
 import { ChatTimeline, CHAT_WALLPAPER } from "@/components/whatsapp/ChatTimeline";
 import { QueueColumns, QueueLegend } from "@/components/whatsapp/QueueColumns";
+import { FinishedList } from "@/components/whatsapp/FinishedList";
+import { SupportFilters } from "@/components/whatsapp/SupportFilters";
 import { NewConversationDialog } from "@/components/whatsapp/NewConversationDialog";
 import { TransferDialog } from "@/components/whatsapp/TransferDialog";
 import { ContactInfo } from "@/components/whatsapp/ContactInfo";
@@ -45,6 +59,7 @@ import {
   deleteSupportMessage,
   setSupportView,
   setSupportTab,
+  saveSupportFilters,
   transferConversation,
 } from "./actions";
 
@@ -64,10 +79,13 @@ const AVISOS: Record<string, string> = {
     "Essa conversa foi transferida para outro setor — sua ação não foi aplicada (a resposta não foi enviada).",
 };
 
+// Finalizados (filtro Situação), por página.
+const FINISHED_PAGE_SIZE = 30;
+
 export default async function WhatsappSuportePage({
   searchParams,
 }: {
-  searchParams: Promise<{ c?: string; aviso?: string; novo?: string }>;
+  searchParams: Promise<{ c?: string; aviso?: string; novo?: string; p?: string } & SupportFilterParams>;
 }) {
   const session = await requireFeature("whatsapp_suporte");
   const features = await getSessionFeatures(session);
@@ -83,6 +101,21 @@ export default async function WhatsappSuportePage({
   const teamView = seesWholeTeam(viewer, view);
 
   const params = await searchParams;
+
+  // Filtros (lib/whatsapp/filters.ts): do cookie, ou de um link que os trouxe
+  // na URL. Finalizados — as conversas que já saíram da fila — só CEO/Gerente.
+  const canSeeFinished = canAccess(features, "whatsapp_gestao");
+  const filtersFromUrl = hasFilterParams(params);
+  const filters = effectiveSupportFilters(
+    filtersFromUrl
+      ? parseSupportFilters(params)
+      : parseSupportFiltersCookie(cookieStore.get(SUPPORT_FILTERS_COOKIE)?.value),
+    { canSeeFinished, teamView }
+  );
+  const finished = filters.status === "finalizados";
+  const agentFilter = canSeeFinished ? (teamView ? "always" : "finalizados") : "never";
+  const filterWhere = supportFilterWhere(filters);
+  const page = Math.max(1, Math.floor(Number(params.p)) || 1);
 
   // Religa cada linha automaticamente se já foi pareada antes e o socket caiu
   // num deploy/restart. No-op nas que já estão conectadas/conectando.
@@ -103,35 +136,77 @@ export default async function WhatsappSuportePage({
     ? await prisma.customer.findUnique({ where: { id: params.novo }, select: { id: true, name: true, phone: true } })
     : null;
 
-  const conversations = await prisma.conversation.findMany({
-    where: queueListWhere(viewer, view),
-    orderBy: { lastMessageAt: "desc" },
-    include: {
-      customer: { select: { id: true, name: true, phone: true, bairro: true } },
-      rating: true,
-      assignedTo: { select: { id: true, name: true } },
-      // Últimas mensagens pra lista: a mais nova dá a prévia e se quem falou
-      // por último foi o cliente (sem resposta — negrito, igual o WhatsApp); a
-      // sequência dele no fim dá há quanto tempo espera. Apagada pra todos não
-      // conta: a resposta que sumiu não respondeu nada.
-      messages: {
-        where: { deletedAt: null },
-        orderBy: { createdAt: "desc" },
-        take: 10,
-        select: { direction: true, body: true, mediaType: true, createdAt: true },
-      },
-    },
-  });
+  const conversations = finished
+    ? []
+    : await prisma.conversation.findMany({
+          where: { AND: [queueListWhere(viewer, view), filterWhere] },
+          orderBy: supportOrderBy(filters.order),
+          include: {
+            customer: { select: { id: true, name: true, phone: true, bairro: true } },
+            rating: true,
+            assignedTo: { select: { id: true, name: true } },
+            // Últimas mensagens pra lista: a mais nova dá a prévia e se quem falou
+            // por último foi o cliente (sem resposta — negrito, igual o WhatsApp); a
+            // sequência dele no fim dá há quanto tempo espera. Apagada pra todos não
+            // conta: a resposta que sumiu não respondeu nada.
+            messages: {
+              where: { deletedAt: null },
+              orderBy: { createdAt: "desc" },
+              take: 10,
+              select: { direction: true, body: true, mediaType: true, createdAt: true },
+            },
+          },
+      });
+
+  const [finishedTotal, finishedConversations, agentUsers] = await Promise.all([
+    finished ? prisma.conversation.count({ where: filterWhere }) : 0,
+    finished
+      ? prisma.conversation.findMany({
+          where: filterWhere,
+          orderBy: supportOrderBy(filters.order),
+          skip: (page - 1) * FINISHED_PAGE_SIZE,
+          take: FINISHED_PAGE_SIZE,
+          include: {
+            customer: { select: { id: true, name: true, phone: true } },
+            assignedTo: { select: { name: true } },
+            resolvedBy: { select: { name: true } },
+            messages: {
+              where: { deletedAt: null },
+              orderBy: { createdAt: "desc" },
+              take: 1,
+              select: { direction: true, body: true, mediaType: true, sender: { select: { name: true } } },
+            },
+          },
+        })
+      : [],
+    // Pro filtro de atendentes: quem já pegou ou finalizou alguma conversa.
+    agentFilter === "never"
+      ? []
+      : prisma.user.findMany({
+          where: { OR: [{ assignedConversations: { some: {} } }, { resolvedConversations: { some: {} } }] },
+          select: { id: true, name: true },
+          orderBy: { name: "asc" },
+        }),
+  ]);
+  const finishedPages = Math.max(1, Math.ceil(finishedTotal / FINISHED_PAGE_SIZE));
+  // Atendente só escolhe entre os setores que enxerga (o dele e a entrada geral).
+  const sectorOptions = [
+    ...SECTORS.map((s) => ({ id: s.id as string, label: s.label })),
+    { id: NO_SECTOR, label: "Geral (sem setor)" },
+  ].filter((o) => canManageQueue || o.id === NO_SECTOR || o.id === viewer.sector);
 
   const now = new Date();
-  const sections = groupByQueueSection(await withWaitingSince(conversations), viewer, view);
+  const sections = groupByQueueSection(sortQueue(await withWaitingSince(conversations), filters.order), viewer, view);
   const open = sections.filter((s) => s.section !== "resolved").flatMap((s) => s.conversations);
   // Aba "Sem resposta +4h": das que a pessoa vê (espera + as dela; Equipe:
   // todas), as que esperam resposta há mais de 4h — o contador aparece sempre.
   const overdue = overdueConversations(open, now);
   // Sem ?c=, abre a primeira da fila (ou da aba +4h) — nunca uma finalizada
   // (igual ao firstInQueue, pra onde vai quem acabou de concluir um atendimento).
-  const activeId = params.c ?? (tab === "atrasadas" ? overdue[0]?.id : undefined) ?? open[0]?.id;
+  // Nos finalizados, nada aberto até clicar, igual ao painel antigo.
+  const activeId = finished
+    ? params.c
+    : (params.c ?? (tab === "atrasadas" ? overdue[0]?.id : undefined) ?? open[0]?.id);
   const activeRaw = activeId
     ? await prisma.conversation.findUnique({
         where: { id: activeId },
@@ -146,9 +221,12 @@ export default async function WhatsappSuportePage({
       })
     : null;
   // Mesma regra da lista: quem não é CEO/Gerente não abre (nem por link
-  // direto com o id) uma conversa assumida por outro atendente ou que está na
-  // espera de outro setor.
-  const active = activeRaw && queueBlockReason(viewer, activeRaw) ? null : activeRaw;
+  // direto com o id) uma conversa assumida por outro atendente, que está na
+  // espera de outro setor ou que já foi finalizada.
+  const active =
+    activeRaw && (queueBlockReason(viewer, activeRaw) || (activeRaw.status === "RESOLVED" && !canSeeFinished))
+      ? null
+      : activeRaw;
 
   return (
     <div className="space-y-4">
@@ -156,15 +234,17 @@ export default async function WhatsappSuportePage({
         <div>
           <h1 className="text-xl font-semibold text-ink-primary">WhatsApp Suporte</h1>
           <p className="text-sm text-ink-muted mt-0.5">
-            {teamView
-              ? "Visão da equipe: todas as conversas · duas linhas"
-              : `Sua fila: clientes em espera e os que estão com você · ${
-                  viewer.sector ? `setor ${sectorLabel(viewer.sector)}` : "sem setor"
-                }`}
+            {finished
+              ? `Atendimentos finalizados · ${finishedTotal} ${finishedTotal === 1 ? "conversa" : "conversas"}`
+              : teamView
+                ? "Visão da equipe: todas as conversas · duas linhas"
+                : `Sua fila: clientes em espera e os que estão com você · ${
+                    viewer.sector ? `setor ${sectorLabel(viewer.sector)}` : "sem setor"
+                  }`}
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-x-5 gap-y-2">
-          <QueueLegend showResolved={teamView} />
+          {!finished && <QueueLegend />}
           <NewConversationDialog
             lines={waStates.map((s) => ({
               id: s.line,
@@ -254,60 +334,83 @@ export default async function WhatsappSuportePage({
         <AutoRefresh intervalMs={anyPairing ? 2500 : 12000} />
       </Card>
 
-      {/* Duas colunas da fila (Em espera | Em atendimento) e o chat ao lado. Em
-          tela média (lg) não cabem três colunas ao lado da barra lateral: as duas
-          listas ficam empilhadas; do xl pra cima o wrapper vira "contents" e cada
-          lista ocupa a própria coluna do grid. */}
-      <div className="grid grid-cols-1 lg:grid-cols-[300px_minmax(0,1fr)] xl:grid-cols-[270px_270px_minmax(0,1fr)] 2xl:grid-cols-[320px_320px_minmax(0,1fr)] gap-4 lg:h-[calc(100vh-340px)] lg:min-h-[480px]">
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-1 lg:grid-rows-2 gap-4 min-h-0 xl:contents">
-          <QueueColumns
-            sections={sections}
-            activeId={activeId}
-            userId={session.userId}
-            overdue={overdue}
-            showOverdue={tab === "atrasadas"}
-            waitingToolbar={
-              <div className="flex gap-1 px-3 py-2 border-b border-wa-border bg-wa-list">
-                {(["fila", "atrasadas"] as const).map((t) => (
-                  <form key={t} action={setSupportTab.bind(null, t)} className="flex-1">
-                    <button
-                      type="submit"
-                      aria-pressed={tab === t}
-                      className={`w-full inline-flex items-center justify-center gap-1.5 rounded-full px-2 py-1 text-xs font-medium transition-colors ${
-                        tab === t ? "bg-wa-green/20 text-wa-green" : "bg-wa-panel text-wa-muted hover:text-wa-text"
-                      }`}
-                    >
-                      {t === "fila" ? "Em espera" : "Sem resposta +4h"}
-                      {t === "atrasadas" && overdue.length > 0 && (
-                        <span className="min-w-[18px] rounded-full bg-[rgb(244,63,94)] px-1 text-[11px] font-semibold leading-[18px] text-white">
-                          {overdue.length}
-                        </span>
-                      )}
-                    </button>
-                  </form>
-                ))}
-              </div>
-            }
-            currentToolbar={
-              canManageQueue ? (
-                <div className="flex gap-1 px-3 py-2 border-b border-wa-border bg-wa-list">
-                  {(["mine", "team"] as const).map((v) => (
-                    <form key={v} action={setSupportView.bind(null, v)} className="flex-1">
-                      <button
-                        type="submit"
-                        aria-pressed={view === v}
-                        className={`w-full rounded-full px-2 py-1 text-xs font-medium transition-colors ${
-                          view === v ? "bg-wa-green/20 text-wa-green" : "bg-wa-panel text-wa-muted hover:text-wa-text"
-                        }`}
-                      >
-                        {v === "mine" ? "Meus" : "Equipe"}
-                      </button>
-                    </form>
-                  ))}
-                </div>
-              ) : undefined
-            }
+      {/* À esquerda o filtro (busca + Situação/Ordem/...) e embaixo as duas
+          colunas da fila (Em espera | Em atendimento) — ou, em Finalizados, a
+          lista das conversas antigas; o chat ao lado. Em tela média (lg) as duas
+          colunas ficam empilhadas; do xl pra cima, lado a lado. */}
+      <div className="grid grid-cols-1 lg:grid-cols-[300px_minmax(0,1fr)] xl:grid-cols-[556px_minmax(0,1fr)] 2xl:grid-cols-[656px_minmax(0,1fr)] gap-4 lg:h-[calc(100vh-340px)] lg:min-h-[560px]">
+        <div className="flex flex-col gap-3 min-h-0">
+          <SupportFilters
+            filters={filters}
+            canSeeFinished={canSeeFinished}
+            agentFilter={agentFilter}
+            sectors={sectorOptions}
+            agents={agentUsers.map((u) => ({ id: u.id, label: u.name }))}
+            lines={WHATSAPP_LINES.map((l) => ({ id: l.id as string, label: l.label }))}
+            fromUrl={filtersFromUrl}
+            save={saveSupportFilters}
           />
+          {finished ? (
+            <FinishedList
+              conversations={finishedConversations}
+              activeId={activeId}
+              page={page}
+              pages={finishedPages}
+              total={finishedTotal}
+              now={now}
+            />
+          ) : (
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-1 lg:grid-rows-2 xl:grid-cols-2 xl:grid-rows-1 gap-4 flex-1 min-h-0">
+              <QueueColumns
+                sections={sections}
+                activeId={activeId}
+                userId={session.userId}
+                overdue={overdue}
+                showOverdue={tab === "atrasadas"}
+                waitingToolbar={
+                  <div className="flex gap-1 px-3 py-2 border-b border-wa-border bg-wa-list">
+                    {(["fila", "atrasadas"] as const).map((t) => (
+                      <form key={t} action={setSupportTab.bind(null, t)} className="flex-1">
+                        <button
+                          type="submit"
+                          aria-pressed={tab === t}
+                          className={`w-full inline-flex items-center justify-center gap-1.5 rounded-full px-2 py-1 text-xs font-medium transition-colors ${
+                            tab === t ? "bg-wa-green/20 text-wa-green" : "bg-wa-panel text-wa-muted hover:text-wa-text"
+                          }`}
+                        >
+                          {t === "fila" ? "Em espera" : "Sem resposta +4h"}
+                          {t === "atrasadas" && overdue.length > 0 && (
+                            <span className="min-w-[18px] rounded-full bg-[rgb(244,63,94)] px-1 text-[11px] font-semibold leading-[18px] text-white">
+                              {overdue.length}
+                            </span>
+                          )}
+                        </button>
+                      </form>
+                    ))}
+                  </div>
+                }
+                currentToolbar={
+                  canManageQueue ? (
+                    <div className="flex gap-1 px-3 py-2 border-b border-wa-border bg-wa-list">
+                      {(["mine", "team"] as const).map((v) => (
+                        <form key={v} action={setSupportView.bind(null, v)} className="flex-1">
+                          <button
+                            type="submit"
+                            aria-pressed={view === v}
+                            className={`w-full rounded-full px-2 py-1 text-xs font-medium transition-colors ${
+                              view === v ? "bg-wa-green/20 text-wa-green" : "bg-wa-panel text-wa-muted hover:text-wa-text"
+                            }`}
+                          >
+                            {v === "mine" ? "Meus" : "Equipe"}
+                          </button>
+                        </form>
+                      ))}
+                    </div>
+                  ) : undefined
+                }
+              />
+            </div>
+          )}
         </div>
 
         <div className="rounded-2xl border border-wa-border bg-wa-bg overflow-hidden flex flex-col min-h-0 h-[75vh] lg:h-auto">
@@ -320,6 +423,7 @@ export default async function WhatsappSuportePage({
                   contact={{
                     id: active.customer.id,
                     name: active.customer.name,
+                    number: active.number,
                     phoneLabel: formatPhone(active.customer.phone),
                     details: [
                       formatPhone(active.customer.phone),
@@ -337,8 +441,9 @@ export default async function WhatsappSuportePage({
                 <div className="flex items-center gap-x-4 gap-y-2 flex-wrap">
                   {active.rating && <Badge status="good">{active.rating.score}★ avaliação</Badge>}
                   <Badge status={active.status === "OPEN" ? "good" : "neutral"}>
-                    {active.status === "OPEN" ? "Em aberto" : "Resolvido"}
+                    {active.status === "OPEN" ? "Em aberto" : "Finalizado"}
                     {active.resolvedBy ? ` por ${active.resolvedBy.name}` : ""}
+                    {active.status !== "OPEN" && active.resolvedAt ? ` · ${formatDate(active.resolvedAt)}` : ""}
                   </Badge>
                   {active.assignedTo ? (
                     <>
@@ -420,14 +525,43 @@ export default async function WhatsappSuportePage({
                 />
               </div>
 
-              <ReplyForm
-                // Limpa a caixa só quando a própria pessoa manda (a última dela
-                // muda) — mensagem nova do cliente não apaga o que está digitando.
-                key={`${active.id}-${active.messages.findLast((m) => m.senderId === session.userId)?.id ?? ""}`}
-                action={sendSupportReply.bind(null, active.id)}
-                placeholder={`Mensagem pela ${whatsappLineLabel(active.line)}`}
-              />
+              {active.status === "RESOLVED" ? (
+                // Finalizado é histórico: cada atendimento é uma conversa, e o
+                // cliente que volta a escrever abre outra. Pra chamar ele de
+                // novo, uma conversa nova (já com o cliente escolhido).
+                <div className="flex flex-wrap items-center justify-center gap-x-4 gap-y-1.5 px-4 py-3 bg-wa-panel text-xs text-wa-muted text-center">
+                  <span>
+                    Atendimento finalizado
+                    {active.resolvedAt ? ` em ${formatDateTime(active.resolvedAt)}` : ""} — só leitura. Se o cliente
+                    escrever de novo, abre um atendimento novo.
+                  </span>
+                  <Link
+                    href={`/admin/whatsapp/suporte?novo=${active.customer.id}`}
+                    className="inline-flex items-center gap-1.5 font-medium text-wa-green hover:brightness-110"
+                  >
+                    <MessageSquarePlus className="w-4 h-4" /> Nova conversa
+                  </Link>
+                </div>
+              ) : (
+                <ReplyForm
+                  // Limpa a caixa só quando a própria pessoa manda (a última dela
+                  // muda) — mensagem nova do cliente não apaga o que está digitando.
+                  key={`${active.id}-${active.messages.findLast((m) => m.senderId === session.userId)?.id ?? ""}`}
+                  action={sendSupportReply.bind(null, active.id)}
+                  placeholder={`Mensagem pela ${whatsappLineLabel(active.line)}`}
+                />
+              )}
             </>
+          ) : finished ? (
+            <div className={`flex-1 flex items-center justify-center p-6 text-center ${CHAT_WALLPAPER}`}>
+              <div>
+                <span className="mx-auto mb-4 w-24 h-24 rounded-full bg-wa-panel flex items-center justify-center">
+                  <MessagesSquare className="w-10 h-10 text-wa-muted" />
+                </span>
+                <p className="text-base font-medium text-wa-text">Nenhuma conversa aberta!</p>
+                <p className="text-sm text-wa-muted mt-1">Selecione um atendimento finalizado para ver o histórico.</p>
+              </div>
+            </div>
           ) : (
             <div className={`flex-1 flex items-center justify-center text-sm text-wa-muted ${CHAT_WALLPAPER}`}>
               <div className="text-center">

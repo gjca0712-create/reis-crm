@@ -8,6 +8,8 @@ import { ContactAvatar } from "./ContactAvatar";
 type Contact = {
   id: string;
   name: string;
+  // Número do atendimento (Conversation.number), ao lado do nome: #123.
+  number?: number;
   phoneLabel: string;
   details: string;
   bairro: string;
@@ -40,7 +42,12 @@ export function ContactInfo({ contact, canOpenCustomer }: { contact: Contact; ca
       >
         <ContactAvatar customerId={contact.id} name={contact.name} className="w-10 h-10 text-base" />
         <span className="min-w-0">
-          <span className="block text-[15px] font-medium text-wa-text truncate">{contact.name}</span>
+          <span className="block text-[15px] font-medium text-wa-text truncate">
+            {contact.name}
+            {contact.number !== undefined && (
+              <span className="text-[13px] font-normal text-wa-muted"> #{contact.number}</span>
+            )}
+          </span>
           <span className="block text-xs text-wa-muted truncate">{contact.details}</span>
         </span>
       </button>

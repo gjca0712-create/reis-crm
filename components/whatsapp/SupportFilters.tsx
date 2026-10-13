@@ -1,61 +1,97 @@
 "use client";
 
 import { useEffect, useRef, useState, useTransition, type ReactNode } from "react";
-import { useRouter } from "next/navigation";
+import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { Check, ChevronDown, ListFilter, Loader2, Search, X, XCircle } from "lucide-react";
 import {
-  ARCHIVE_ORDERS,
-  ARCHIVE_STATUSES,
-  DEFAULT_ARCHIVE_FILTERS,
-  archiveQuery,
+  DEFAULT_SUPPORT_FILTERS,
+  SUPPORT_STATUSES,
   hasActiveFilters,
-  type ArchiveFilters as Filters,
-} from "@/lib/whatsapp/archive";
+  ordersFor,
+  parseSupportFiltersCookie,
+  supportFiltersQuery,
+  type SupportFilters as Filters,
+} from "@/lib/whatsapp/filters";
 
 type Option = { id: string; label: string };
 type Menu = "sectors" | "agents" | "lines" | null;
 
-// Topo da lista de Mensagens antigas: busca nas mensagens, título com a
-// situação escolhida, botão de limpar e o painel de filtros (cada mudança já
-// aplica, igual ao painel de atendimentos que a loja usava).
-export function ArchiveFilters({
+// Topo das listas do Suporte: busca nas mensagens, título com a situação
+// escolhida, botão de limpar e o painel de filtros (cada mudança já aplica,
+// igual ao painel de atendimentos que a loja usava). A escolha vai pro cookie
+// pela action save, que atualiza a tela no lugar.
+// canSeeFinished: CEO/Gerente — mostra "Situação" (Em aberto | Finalizados).
+// agentFilter: onde o filtro de atendente vale ("finalizados" = só lá).
+// fromUrl: os filtros vieram de um link — grava no cookie e limpa a URL.
+export function SupportFilters({
   filters,
+  canSeeFinished,
+  agentFilter,
   sectors,
   agents,
   lines,
+  fromUrl = false,
+  save,
 }: {
   filters: Filters;
+  canSeeFinished: boolean;
+  agentFilter: "always" | "finalizados" | "never";
   sectors: Option[];
   agents: Option[];
   lines: Option[];
+  fromUrl?: boolean;
+  save: (query: string) => Promise<void>;
 }) {
   const router = useRouter();
+  const pathname = usePathname();
+  const searchParams = useSearchParams();
   const [pending, startTransition] = useTransition();
   const [current, setCurrent] = useState(filters);
   const [q, setQ] = useState(filters.q);
   const [open, setOpen] = useState(false);
   const [menu, setMenu] = useState<Menu>(null);
   const box = useRef<HTMLDivElement>(null);
+  const persisted = useRef(false);
 
-  // A página volta do servidor com os filtros aplicados (ou outros, pelo voltar do navegador).
+  // A página volta do servidor com os filtros aplicados. Pela query string, e
+  // não pelo objeto: a atualização automática (12s) manda um objeto novo igual
+  // e apagaria o que a pessoa está digitando na busca.
+  const filtersKey = supportFiltersQuery(filters);
   useEffect(() => {
-    setCurrent(filters);
-    setQ(filters.q);
-  }, [filters]);
+    const f = parseSupportFiltersCookie(filtersKey);
+    setCurrent(f);
+    setQ(f.q);
+  }, [filtersKey]);
+
+  // Grava e, se a URL tinha o que não vale mais, limpa: trocando de situação
+  // saem a página e a conversa aberta (eram da outra lista); senão só a página
+  // e os filtros que vieram num link.
+  const persist = (query: string, statusChanged: boolean) =>
+    startTransition(async () => {
+      await save(query);
+      const c = statusChanged ? null : searchParams.get("c");
+      const target = c ? `${pathname}?c=${encodeURIComponent(c)}` : pathname;
+      const now = searchParams.toString() ? `${pathname}?${searchParams.toString()}` : pathname;
+      if (target !== now) router.replace(target, { scroll: false });
+    });
+
+  useEffect(() => {
+    if (!fromUrl || persisted.current) return;
+    persisted.current = true;
+    persist(supportFiltersQuery(filters), false);
+  });
 
   useEffect(() => {
     if (!open) return;
+    const close = () => {
+      setOpen(false);
+      setMenu(null);
+    };
     const onDown = (e: MouseEvent) => {
-      if (box.current && !box.current.contains(e.target as Node)) {
-        setOpen(false);
-        setMenu(null);
-      }
+      if (box.current && !box.current.contains(e.target as Node)) close();
     };
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") {
-        setOpen(false);
-        setMenu(null);
-      }
+      if (e.key === "Escape") close();
     };
     document.addEventListener("mousedown", onDown);
     document.addEventListener("keydown", onKey);
@@ -67,14 +103,17 @@ export function ArchiveFilters({
 
   const apply = (changes: Partial<Filters>) => {
     const next = { ...current, ...changes };
+    if (!ordersFor(next.status).some((o) => o.id === next.order)) next.order = DEFAULT_SUPPORT_FILTERS.order;
+    if (agentFilter === "finalizados" && next.status !== "finalizados") next.agents = [];
     setCurrent(next);
-    startTransition(() => router.replace(archiveQuery(next), { scroll: false }));
+    persist(supportFiltersQuery(next), next.status !== current.status);
   };
 
-  const title = ARCHIVE_STATUSES.find((s) => s.id === current.status)?.label ?? "Finalizados";
+  const title = SUPPORT_STATUSES.find((s) => s.id === current.status)?.label ?? "Em aberto";
+  const showAgents = agentFilter === "always" || (agentFilter === "finalizados" && current.status === "finalizados");
 
   return (
-    <div className="px-3 pt-3 pb-2.5 border-b border-wa-border bg-wa-list rounded-t-2xl">
+    <div ref={box} className="relative shrink-0 rounded-2xl border border-wa-border bg-wa-list px-3 pt-3 pb-2.5">
       <form
         role="search"
         onSubmit={(e) => {
@@ -111,14 +150,14 @@ export function ArchiveFilters({
           {title}
           {pending && <Loader2 className="w-4 h-4 animate-spin text-wa-muted" aria-label="Carregando" />}
         </h2>
-        <div ref={box} className="relative flex items-center gap-1.5">
+        <div className="flex items-center gap-1.5">
           {hasActiveFilters(current) && (
             <button
               type="button"
               onClick={() => {
                 setQ("");
                 setMenu(null);
-                apply(DEFAULT_ARCHIVE_FILTERS);
+                apply(DEFAULT_SUPPORT_FILTERS);
               }}
               title="Limpar filtros"
               aria-label="Limpar filtros"
@@ -142,59 +181,70 @@ export function ArchiveFilters({
           >
             <ListFilter className="w-4 h-4" />
           </button>
-
-          {open && (
-            <div className="absolute right-0 top-10 z-30 w-[330px] max-w-[calc(100vw-48px)] rounded-xl border border-wa-border bg-wa-panel shadow-2xl p-4 space-y-3">
-              <Row label="Situação">
-                <Select
-                  label="Situação"
-                  value={current.status}
-                  options={ARCHIVE_STATUSES}
-                  onChange={(v) => apply({ status: v as Filters["status"] })}
-                />
-              </Row>
-              <Row label="Ordenar por">
-                <Select
-                  label="Ordenar por"
-                  value={current.order}
-                  options={ARCHIVE_ORDERS}
-                  onChange={(v) => apply({ order: v as Filters["order"] })}
-                />
-              </Row>
-              <Row label="Departamentos">
-                <MultiSelect
-                  label="Departamentos"
-                  options={sectors}
-                  value={current.sectors}
-                  open={menu === "sectors"}
-                  onToggle={() => setMenu(menu === "sectors" ? null : "sectors")}
-                  onChange={(v) => apply({ sectors: v.length === sectors.length ? [] : v })}
-                />
-              </Row>
-              <Row label="Atendentes">
-                <MultiSelect
-                  label="Atendentes"
-                  options={agents}
-                  value={current.agents}
-                  open={menu === "agents"}
-                  onToggle={() => setMenu(menu === "agents" ? null : "agents")}
-                  onChange={(v) => apply({ agents: v.length === agents.length ? [] : v })}
-                />
-              </Row>
-              <Row label="Caixas de entrada">
-                <MultiSelect
-                  label="Caixas de entrada"
-                  options={lines}
-                  value={current.lines}
-                  open={menu === "lines"}
-                  onToggle={() => setMenu(menu === "lines" ? null : "lines")}
-                  onChange={(v) => apply({ lines: v.length === lines.length ? [] : v })}
-                />
-              </Row>
-            </div>
-          )}
         </div>
       </div>
+
+      {open && (
+        <div className="absolute left-3 top-full mt-1.5 z-30 w-[330px] max-w-[calc(100vw-48px)] rounded-xl border border-wa-border bg-wa-panel shadow-2xl p-4 space-y-3">
+          {canSeeFinished && (
+            <Row label="Situação">
+              <Select
+                label="Situação"
+                value={current.status}
+                options={SUPPORT_STATUSES}
+                onChange={(v) => apply({ status: v as Filters["status"] })}
+              />
+            </Row>
+          )}
+          <Row label="Ordenar por">
+            <Select
+              label="Ordenar por"
+              value={current.order}
+              options={ordersFor(current.status)}
+              onChange={(v) => apply({ order: v as Filters["order"] })}
+            />
+          </Row>
+          {sectors.length > 1 && (
+            <Row label="Departamentos">
+              <MultiSelect
+                label="Departamentos"
+                options={sectors}
+                value={current.sectors}
+                open={menu === "sectors"}
+                onToggle={() => setMenu(menu === "sectors" ? null : "sectors")}
+                onChange={(v) => apply({ sectors: v.length === sectors.length ? [] : v })}
+              />
+            </Row>
+          )}
+          {showAgents && agents.length > 0 && (
+            <Row label="Atendentes">
+              <MultiSelect
+                label="Atendentes"
+                options={agents}
+                value={current.agents}
+                open={menu === "agents"}
+                onToggle={() => setMenu(menu === "agents" ? null : "agents")}
+                onChange={(v) => apply({ agents: v.length === agents.length ? [] : v })}
+              />
+            </Row>
+          )}
+          <Row label="Caixas de entrada">
+            <MultiSelect
+              label="Caixas de entrada"
+              options={lines}
+              value={current.lines}
+              open={menu === "lines"}
+              onToggle={() => setMenu(menu === "lines" ? null : "lines")}
+              onChange={(v) => apply({ lines: v.length === lines.length ? [] : v })}
+            />
+          </Row>
+          {current.order === "chegada" && (
+            <p className="text-[11px] leading-snug text-wa-muted">
+              Quem espera resposta há mais tempo fica em cima; as já respondidas vêm depois.
+            </p>
+          )}
+        </div>
+      )}
     </div>
   );
 }

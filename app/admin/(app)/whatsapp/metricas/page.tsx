@@ -147,7 +147,7 @@ export default async function MetricasAtendimentoPage({
                       {phone ? (
                         <span className="text-ink-muted">—</span>
                       ) : a.resolved ? (
-                        <Link href={`/admin/whatsapp/antigas?a=${a.id}`} className="text-ink-secondary hover:text-gold-400 hover:underline">
+                        <Link href={`/admin/whatsapp/suporte?situacao=finalizados&ordem=finalizacao&atendente=${a.id}`} className="text-ink-secondary hover:text-gold-400 hover:underline">
                           {a.resolved}
                         </Link>
                       ) : (

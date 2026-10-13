@@ -2,12 +2,20 @@ import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { canManageQueue } from "./message-permissions";
 import { needsReply } from "./closing";
+import {
+  DEFAULT_SUPPORT_FILTERS,
+  ordersFor,
+  sortQueue,
+  supportFilterWhere,
+  supportOrderBy,
+  type SupportFilters,
+} from "./filters";
 
 // Fila de atendimento do WhatsApp Suporte (whatsapp/suporte/page.tsx). Cada
 // usuário vê a própria fila: quem está esperando alguém assumir e as conversas
 // que estão com ele — CEO e Gerente também. Eles podem trocar pra visão
-// "Equipe" (supervisão), que mostra ainda as conversas com os colegas e as
-// finalizadas.
+// "Equipe" (supervisão), que mostra ainda as conversas com os colegas. As
+// finalizadas ficam no filtro da tela (Situação: Finalizados, lib/whatsapp/filters.ts).
 // Setores (lib/whatsapp/sectors.ts): conversa transferida pra um setor só
 // aparece em "Em espera" pra quem é dele (e pra CEO/Gerente). Sem setor
 // (entrada geral, toda conversa nova) aparece pra todo mundo.
@@ -82,7 +90,7 @@ export function seesWholeTeam(viewer: Viewer, view: QueueView): boolean {
 
 // Ordem das seções na lista, de cima pra baixo.
 export function visibleQueueSections(viewer: Viewer, view: QueueView = "mine"): QueueSection[] {
-  return seesWholeTeam(viewer, view) ? ["waiting", "mine", "team", "resolved"] : ["waiting", "mine"];
+  return seesWholeTeam(viewer, view) ? ["waiting", "mine", "team"] : ["waiting", "mine"];
 }
 
 // Resolvida nunca fica atribuída (resolveConversation solta), então o que
@@ -93,10 +101,10 @@ export function queueSection(conversation: QueuedConversation, userId: string): 
   return conversation.assignedToId === userId ? "mine" : "team";
 }
 
-// Filtro no banco equivalente a visibleQueueSections: na própria fila nem
-// carrega as finalizadas nem as dos colegas.
+// Filtro no banco equivalente a visibleQueueSections: nunca as finalizadas, e
+// na própria fila também não as dos colegas.
 export function queueListWhere(viewer: Viewer, view: QueueView = "mine"): Prisma.ConversationWhereInput {
-  if (seesWholeTeam(viewer, view)) return {};
+  if (seesWholeTeam(viewer, view)) return { status: { not: "RESOLVED" } };
   return {
     status: { not: "RESOLVED" },
     OR: [{ assignedToId: viewer.userId }, { AND: [{ assignedToId: null }, waitingWhere(viewer)] }],
@@ -117,17 +125,39 @@ export function groupByQueueSection<T extends QueuedConversation>(
 }
 
 // A conversa que abre depois de concluir um atendimento: a primeira da fila na
-// ordem da tela, sem contar as finalizadas. null = fila vazia. skipId: a que
-// acabou de sair (transferida) — CEO/Gerente ainda a veem na espera.
-export async function firstInQueue(viewer: Viewer, view: QueueView = "mine", skipId?: string): Promise<string | null> {
+// ordem da tela (com os filtros e a ordem escolhidos), sem contar as
+// finalizadas. null = fila vazia. skipId: a que acabou de sair (transferida) —
+// CEO/Gerente ainda a veem na espera.
+export async function firstInQueue(
+  viewer: Viewer,
+  view: QueueView = "mine",
+  skipId?: string,
+  filters?: SupportFilters
+): Promise<string | null> {
+  // A situação do filtro não conta aqui: a próxima é sempre da fila em aberto.
+  const queueFilters: SupportFilters = { ...(filters ?? DEFAULT_SUPPORT_FILTERS), status: "abertos" };
+  const order = ordersFor("abertos").some((o) => o.id === queueFilters.order) ? queueFilters.order : "atividade";
   const open = await prisma.conversation.findMany({
     where: {
-      AND: [queueListWhere(viewer, view), { status: { not: "RESOLVED" } }, ...(skipId ? [{ id: { not: skipId } }] : [])],
+      AND: [queueListWhere(viewer, view), supportFilterWhere(queueFilters), ...(skipId ? [{ id: { not: skipId } }] : [])],
     },
-    orderBy: { lastMessageAt: "desc" },
-    select: { id: true, status: true, assignedToId: true, sector: true },
+    orderBy: supportOrderBy(order),
+    select: {
+      id: true,
+      status: true,
+      assignedToId: true,
+      sector: true,
+      lastMessageAt: true,
+      messages: {
+        where: { deletedAt: null },
+        orderBy: { createdAt: "desc" },
+        take: 1,
+        select: { direction: true, body: true, mediaType: true },
+      },
+    },
   });
-  return groupByQueueSection(open, viewer, view).flatMap((s) => s.conversations)[0]?.id ?? null;
+  const sorted: typeof open = order === "chegada" ? sortQueue(await withWaitingSince(open), order) : open;
+  return groupByQueueSection(sorted, viewer, view).flatMap((s) => s.conversations)[0]?.id ?? null;
 }
 
 // Aba "Sem resposta +4h": clientes esperando resposta há mais de 4 horas,

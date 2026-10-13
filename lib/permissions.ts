@@ -30,7 +30,7 @@ export const FEATURE_LABELS: Record<Feature, string> = {
   bairros: "Bairros",
   whatsapp_suporte: "WhatsApp Suporte",
   whatsapp_campanhas: "WhatsApp Campanhas",
-  whatsapp_gestao: "WhatsApp: métricas e mensagens antigas",
+  whatsapp_gestao: "WhatsApp: métricas e atendimentos finalizados",
   atendentes: "Atendentes (gestão de equipe)",
   avaliacoes: "Avaliações",
   ocorrencias: "Ocorrências",
@@ -46,8 +46,9 @@ export const FEATURE_LABELS: Record<Feature, string> = {
 // requireCeo() (checagem de role, não de feature).
 export const CEO_ONLY_FEATURES: Feature[] = ["atendentes", "auditoria"];
 
-// Métricas de atendimento e mensagens antigas do WhatsApp: sempre pra CEO e
-// Gerente, nunca pra mais ninguém (nem personalizando) — é supervisão da equipe.
+// Métricas de atendimento e os atendimentos finalizados do WhatsApp (filtro
+// Situação do Suporte): sempre pra CEO e Gerente, nunca pra mais ninguém (nem
+// personalizando) — é supervisão da equipe.
 export const MANAGER_ONLY_FEATURES: Feature[] = ["whatsapp_gestao"];
 
 export const CUSTOMIZABLE_FEATURES: Feature[] = (Object.keys(FEATURE_LABELS) as Feature[]).filter(

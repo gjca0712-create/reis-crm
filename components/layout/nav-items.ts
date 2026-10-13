@@ -15,7 +15,6 @@ import {
   Package,
   MessagesSquare,
   BarChart3,
-  Archive,
   type LucideIcon,
 } from "lucide-react";
 import type { Feature } from "@/lib/permissions";
@@ -37,7 +36,6 @@ export const NAV_ITEMS: NavItem[] = [
   { href: "/admin/whatsapp/suporte", label: "WhatsApp Suporte", icon: MessageCircle, feature: "whatsapp_suporte" },
   { href: "/admin/whatsapp/campanhas", label: "WhatsApp Campanhas", icon: Send, feature: "whatsapp_campanhas" },
   { href: "/admin/whatsapp/metricas", label: "Métricas de atendimento", icon: BarChart3, feature: "whatsapp_gestao" },
-  { href: "/admin/whatsapp/antigas", label: "Mensagens antigas", icon: Archive, feature: "whatsapp_gestao" },
   { href: "/admin/chat-interno", label: "Chat interno", icon: MessagesSquare, badge: "team-chat" },
   { href: "/admin/atendentes", label: "Atendentes", icon: Headphones, feature: "atendentes" },
   { href: "/admin/avaliacoes", label: "Avaliações", icon: Star, feature: "avaliacoes" },

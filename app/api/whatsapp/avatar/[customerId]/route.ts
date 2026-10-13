@@ -10,8 +10,7 @@ export const dynamic = "force-dynamic";
 export async function GET(request: NextRequest, { params }: { params: Promise<{ customerId: string }> }) {
   const session = await getSession();
   const features = session ? await getSessionFeatures(session) : [];
-  // Mensagens antigas (whatsapp_gestao) também mostra foto e anexos.
-  if (!session || (!canAccess(features, "whatsapp_suporte") && !canAccess(features, "whatsapp_gestao"))) {
+  if (!session || !canAccess(features, "whatsapp_suporte")) {
     return new NextResponse("Não autorizado", { status: 401 });
   }
 

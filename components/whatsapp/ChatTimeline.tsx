@@ -6,8 +6,7 @@ import { sectorLabel } from "@/lib/whatsapp/sectors";
 import { ChatImage } from "./ChatImage";
 
 // Balões da conversa (mensagens + transferências na ordem em que aconteceram),
-// com separador de dia — usado no WhatsApp Suporte e, só leitura, em Mensagens
-// antigas.
+// com separador de dia — usado no WhatsApp Suporte.
 
 // Fundo da conversa: pontinhos bem fracos, no lugar do papel de parede do WhatsApp.
 export const CHAT_WALLPAPER = "bg-[radial-gradient(rgba(255,255,255,0.035)_1px,transparent_1px)] [background-size:18px_18px]";

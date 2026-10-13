@@ -38,10 +38,18 @@ import {
   parseQueueTab,
   parseQueueView,
   queueBlockReason,
+  seesWholeTeam,
   type QueueTab,
   type QueueView,
   type QueueViewer,
 } from "@/lib/whatsapp/queue";
+import {
+  SUPPORT_FILTERS_COOKIE,
+  effectiveSupportFilters,
+  parseSupportFiltersCookie,
+  supportFiltersQuery,
+  type SupportFilters,
+} from "@/lib/whatsapp/filters";
 import { transferConversationAs } from "@/lib/whatsapp/transfer";
 import { logAudit } from "@/lib/audit";
 
@@ -119,6 +127,42 @@ export async function setSupportTab(tab: QueueTab) {
     maxAge: 60 * 60 * 24 * 365,
   });
   revalidatePath("/admin/whatsapp/suporte");
+}
+
+// Filtros do Suporte (lib/whatsapp/filters.ts): em cookie, igual à aba. Sem
+// redirect: a tela atualiza no lugar e o painel de filtros continua aberto pra
+// marcar o próximo (a URL, quando precisa, a própria tela ajusta). O que cada
+// um pode usar (Finalizados só CEO/Gerente) a tela decide ao ler.
+export async function saveSupportFilters(query: string) {
+  await requireFeature("whatsapp_suporte");
+  await writeSupportFilters(parseSupportFiltersCookie(query.slice(0, 2000)));
+  revalidatePath("/admin/whatsapp/suporte");
+}
+
+async function writeSupportFilters(filters: SupportFilters) {
+  const store = await cookies();
+  const query = supportFiltersQuery(filters);
+  if (!query) {
+    store.delete({ name: SUPPORT_FILTERS_COOKIE, path: "/admin/whatsapp" });
+    return;
+  }
+  store.set(SUPPORT_FILTERS_COOKIE, query, {
+    path: "/admin/whatsapp",
+    httpOnly: true,
+    sameSite: "lax",
+    maxAge: 60 * 60 * 24 * 365,
+  });
+}
+
+// Visão e filtros escolhidos na tela — a próxima da fila segue a mesma ordem.
+async function queuePrefs(viewer: QueueViewer) {
+  const store = await cookies();
+  const view = parseQueueView(store.get(QUEUE_VIEW_COOKIE)?.value);
+  const filters = effectiveSupportFilters(parseSupportFiltersCookie(store.get(SUPPORT_FILTERS_COOKIE)?.value), {
+    canSeeFinished: canManageQueue(viewer.role),
+    teamView: seesWholeTeam(viewer, view),
+  });
+  return { view, filters };
 }
 
 // Devolve a conversa pra fila (livre pra qualquer um assumir de novo). Só
@@ -266,7 +310,15 @@ export async function startConversation(
     line: String(formData.get("line") || ""),
     body: String(formData.get("body") || ""),
   });
-  if (outcome && "conversationId" in outcome) revalidatePath("/admin/whatsapp/suporte");
+  if (outcome && "conversationId" in outcome) {
+    // Começou pelo "Nova conversa" de um atendimento finalizado: a tela volta
+    // pra fila em aberto, onde a conversa nova está.
+    const filters = parseSupportFiltersCookie((await cookies()).get(SUPPORT_FILTERS_COOKIE)?.value);
+    if (filters.status === "finalizados") {
+      await writeSupportFilters({ ...filters, status: "abertos", order: "atividade", agents: [] });
+    }
+    revalidatePath("/admin/whatsapp/suporte");
+  }
   return outcome;
 }
 
@@ -292,8 +344,8 @@ export async function transferConversation(
   if ("error" in result) return result;
 
   revalidatePath("/admin/whatsapp/suporte");
-  const view = parseQueueView((await cookies()).get(QUEUE_VIEW_COOKIE)?.value);
-  return { next: await firstInQueue(viewer, view, conversationId) };
+  const { view, filters } = await queuePrefs(viewer);
+  return { next: await firstInQueue(viewer, view, conversationId, filters) };
 }
 
 // Pedido de avaliação DESLIGADO (2026-09-28): a mesma mensagem automática pra
@@ -360,8 +412,8 @@ export async function resolveConversation(conversationId: string) {
         : "avaliacao-numero-invalido";
   // Concluída sai da tela: abre a próxima da fila (com o id na URL, senão a
   // conversa aberta trocaria sozinha quando a lista reordena no auto-refresh).
-  const view = parseQueueView((await cookies()).get(QUEUE_VIEW_COOKIE)?.value);
-  const next = await firstInQueue(viewer, view);
+  const { view, filters } = await queuePrefs(viewer);
+  const next = await firstInQueue(viewer, view, undefined, filters);
   const query = [next && `c=${next}`, aviso && `aviso=${aviso}`].filter(Boolean).join("&");
   redirect(`/admin/whatsapp/suporte${query ? `?${query}` : ""}`);
 }

@@ -1,6 +1,6 @@
 import Link from "next/link";
 import type { ReactNode } from "react";
-import { ChevronDown, Camera, Video, Mic, FileText } from "lucide-react";
+import { Camera, Video, Mic, FileText } from "lucide-react";
 import { formatListTime, formatPhone, formatWaitingTime } from "@/lib/format";
 import { whatsappLineLabel } from "@/lib/whatsapp/lines";
 import { sectorLabel } from "@/lib/whatsapp/sectors";
@@ -19,8 +19,9 @@ const STATE_BAR = {
   resolved: "bg-status-good",
 } as const;
 
-// Legenda das cores acima (a página mostra junto do título).
-export function QueueLegend({ showResolved }: { showResolved: boolean }) {
+// Legenda das cores acima (a página mostra junto do título). Finalizada não
+// entra: as finalizadas saíram da fila e ficam no filtro (Situação: Finalizados).
+export function QueueLegend() {
   return (
     <div className="flex flex-wrap gap-x-4 gap-y-1 text-[11px] text-ink-muted">
       <span className="inline-flex items-center gap-1.5">
@@ -29,11 +30,6 @@ export function QueueLegend({ showResolved }: { showResolved: boolean }) {
       <span className="inline-flex items-center gap-1.5">
         <span className={`w-1 h-3 rounded-full ${STATE_BAR.inProgress}`} /> Respondida
       </span>
-      {showResolved && (
-        <span className="inline-flex items-center gap-1.5">
-          <span className={`w-1 h-3 rounded-full ${STATE_BAR.resolved}`} /> Finalizada
-        </span>
-      )}
     </div>
   );
 }
@@ -42,6 +38,7 @@ type ListMessage = { direction: string; body: string; mediaType: string | null; 
 
 export type QueueConversation = {
   id: string;
+  number: number;
   status: string;
   line: string;
   sector: string | null;
@@ -62,7 +59,7 @@ type Sections<T> = { section: QueueSection; conversations: T[] }[];
 
 // As duas colunas da fila, antes do chat: "Em espera" (ninguém assumiu) e "Em
 // atendimento" (as que estão com quem está logado; na visão "Equipe" de
-// CEO/Gerente, também as dos colegas e as finalizadas, recolhidas).
+// CEO/Gerente, também as dos colegas).
 // currentToolbar: faixa logo abaixo do título de Em atendimento (a chave
 // Meus/Equipe da página). Devolve as duas colunas soltas — quem posiciona é o
 // grid da página.
@@ -88,7 +85,7 @@ export function QueueColumns<T extends QueueConversation>({
   const now = new Date();
   const waiting = sections.find((s) => s.section === "waiting")?.conversations ?? [];
   const current = sections.filter((s) => s.section !== "waiting");
-  const inProgress = current.filter((s) => s.section !== "resolved").reduce((n, s) => n + s.conversations.length, 0);
+  const inProgress = current.reduce((n, s) => n + s.conversations.length, 0);
   // Atendente só tem "Com você" nessa coluna: o título já diz, sem subtítulo.
   const onlyMine = current.length === 1 && current[0].section === "mine";
 
@@ -126,35 +123,12 @@ export function QueueColumns<T extends QueueConversation>({
           : current.map(({ section, conversations: rows }) => {
               const empty = QUEUE_SECTION_EMPTY[section];
               if (rows.length === 0 && !empty) return null;
-              const header = (
-                <>
-                  <span className="inline-flex items-center gap-1">
-                    {section === "resolved" && (
-                      <ChevronDown className="w-3.5 h-3.5 -rotate-90 transition-transform group-open:rotate-0" />
-                    )}
-                    {QUEUE_SECTION_LABELS[section]}
-                  </span>
-                  <span>{rows.length}</span>
-                </>
-              );
-              const headerClass =
-                "sticky top-0 z-10 flex items-center justify-between gap-2 border-b border-wa-border bg-wa-list px-4 py-1.5 text-[11px] font-semibold uppercase tracking-wide text-wa-green";
-
-              // Finalizadas começam recolhidas: é histórico, e empurraria a
-              // fila pra baixo. Abre sozinha se a conversa à direita está nela.
-              if (section === "resolved") {
-                return (
-                  <details key={section} className="group" open={rows.some((c) => c.id === activeId)}>
-                    <summary className={`${headerClass} cursor-pointer list-none [&::-webkit-details-marker]:hidden`}>
-                      {header}
-                    </summary>
-                    {rowsOrEmpty(rows, empty)}
-                  </details>
-                );
-              }
               return (
                 <section key={section}>
-                  <div className={headerClass}>{header}</div>
+                  <div className="sticky top-0 z-10 flex items-center justify-between gap-2 border-b border-wa-border bg-wa-list px-4 py-1.5 text-[11px] font-semibold uppercase tracking-wide text-wa-green">
+                    <span>{QUEUE_SECTION_LABELS[section]}</span>
+                    <span>{rows.length}</span>
+                  </div>
                   {rowsOrEmpty(rows, empty)}
                 </section>
               );
@@ -281,7 +255,7 @@ function QueueRow({
       <div className="min-w-0 flex-1 border-b border-wa-border/70 pb-2.5 -mb-2.5">
         <div className="flex items-baseline justify-between gap-2">
           <span className={`text-[15px] text-wa-text truncate ${unanswered ? "font-semibold" : "font-normal"}`}>
-            {c.customer.name}
+            {c.customer.name} <span className="text-xs font-normal text-wa-muted">#{c.number}</span>
           </span>
           <span className={`text-xs shrink-0 ${unanswered ? "text-wa-green font-medium" : "text-wa-muted"}`}>
             {formatListTime(last?.createdAt ?? c.lastMessageAt, now)}
