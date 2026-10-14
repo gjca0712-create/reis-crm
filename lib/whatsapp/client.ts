@@ -700,6 +700,9 @@ export type OutboundMedia = {
   mimetype: string;
   fileName?: string;
   caption?: string;
+  // Mensagem de voz gravada no CRM (Ogg/Opus já conferido — ver
+  // lib/whatsapp/voice-note.ts): vai como áudio de voz, com a duração.
+  voiceNoteSeconds?: number;
 };
 
 export async function sendWhatsAppMedia(
@@ -726,7 +729,9 @@ export async function sendWhatsAppMedia(
       : category === "video"
         ? { video: media.buffer, mimetype: media.mimetype, caption: media.caption }
         : category === "audio"
-          ? { audio: media.buffer, mimetype: media.mimetype }
+          ? media.voiceNoteSeconds !== undefined
+            ? { audio: media.buffer, mimetype: media.mimetype, ptt: true, seconds: media.voiceNoteSeconds }
+            : { audio: media.buffer, mimetype: media.mimetype }
           : { document: media.buffer, mimetype: media.mimetype, fileName: media.fileName ?? "arquivo", caption: media.caption };
 
   try {

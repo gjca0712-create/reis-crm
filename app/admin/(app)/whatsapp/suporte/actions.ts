@@ -24,6 +24,7 @@ import {
   type StartConversationResult,
 } from "@/lib/whatsapp/start-conversation";
 import { saveMediaBuffer, mediaCategoryFromMimetype } from "@/lib/whatsapp/media";
+import { VOICE_NOTE_MIMETYPE, oggOpusInfo } from "@/lib/whatsapp/voice-note";
 import {
   canManageQueue,
   sentMessagePermissions,
@@ -235,11 +236,14 @@ export async function sendSupportReply(conversationId: string, formData: FormDat
 
   if (hasMedia && mediaFile instanceof File) {
     const buffer = Buffer.from(await mediaFile.arrayBuffer());
-    const mimetype = mediaFile.type || "application/octet-stream";
-    mediaUrl = await saveMediaBuffer(buffer, mimetype, mediaFile.name);
+    // Gravado no CRM (voice=1, ReplyForm): só vai como mensagem de voz se for
+    // mesmo Ogg/Opus — senão segue como um arquivo de áudio qualquer.
+    const voiceNote = formData.get("voice") === "1" ? oggOpusInfo(buffer) : null;
+    const mimetype = voiceNote ? VOICE_NOTE_MIMETYPE : mediaFile.type || "application/octet-stream";
+    mediaUrl = await saveMediaBuffer(buffer, mimetype, voiceNote ? "audio.ogg" : mediaFile.name);
     mediaType = mediaCategoryFromMimetype(mimetype);
     mediaMimeType = mimetype;
-    mediaFileName = mediaFile.name || undefined;
+    mediaFileName = voiceNote ? undefined : mediaFile.name || undefined;
 
     // Responde SEMPRE pela mesma linha que recebeu a conversa. Foto/vídeo/
     // documento sem texto levam só o nome na legenda; áudio sem texto vai sem
@@ -249,6 +253,7 @@ export async function sendSupportReply(conversationId: string, formData: FormDat
       mimetype,
       fileName: mediaFileName,
       caption: (body || mediaType !== "audio" ? signAgentMessage(senderName, body) : body) || undefined,
+      voiceNoteSeconds: voiceNote?.seconds,
     });
   } else {
     result = await sendWhatsAppMessage(line, conversation.customer, signAgentMessage(senderName, body));
