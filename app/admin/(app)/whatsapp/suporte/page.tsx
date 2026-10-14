@@ -39,7 +39,7 @@ import { AutoRefresh } from "@/components/whatsapp/AutoRefresh";
 import { ReplyForm } from "@/components/whatsapp/ReplyForm";
 import { MessageActions } from "@/components/whatsapp/MessageActions";
 import { ChatTimeline, CHAT_WALLPAPER } from "@/components/whatsapp/ChatTimeline";
-import { QueueColumns, QueueLegend } from "@/components/whatsapp/QueueColumns";
+import { QueueList, QueueLegend } from "@/components/whatsapp/QueueList";
 import { FinishedList } from "@/components/whatsapp/FinishedList";
 import { SupportFilters } from "@/components/whatsapp/SupportFilters";
 import { NewConversationDialog } from "@/components/whatsapp/NewConversationDialog";
@@ -91,8 +91,8 @@ export default async function WhatsappSuportePage({
   const features = await getSessionFeatures(session);
   // Todo mundo vê a própria fila — em espera (do seu setor e da entrada geral)
   // + as que estão com a pessoa. CEO e Gerente ainda podem abrir/mexer em
-  // qualquer conversa e trocar a coluna Em atendimento pra visão "Equipe" (ver
-  // lib/whatsapp/queue.ts).
+  // qualquer conversa e trocar a fila pra visão "Equipe", com as dos colegas
+  // (ver lib/whatsapp/queue.ts).
   const canManageQueue = managesQueue(session.role);
   const viewer = await loadQueueViewer(session);
   const cookieStore = await cookies();
@@ -334,12 +334,13 @@ export default async function WhatsappSuportePage({
         <AutoRefresh intervalMs={anyPairing ? 2500 : 12000} />
       </Card>
 
-      {/* À esquerda o filtro (busca + Situação/Ordem/...) e embaixo as duas
-          colunas da fila (Em espera | Em atendimento) — ou, em Finalizados, a
-          lista das conversas antigas; o chat ao lado. Em tela média (lg) as duas
-          colunas ficam empilhadas; do xl pra cima, lado a lado. */}
-      <div className="grid grid-cols-1 lg:grid-cols-[300px_minmax(0,1fr)] xl:grid-cols-[556px_minmax(0,1fr)] 2xl:grid-cols-[656px_minmax(0,1fr)] gap-4 lg:h-[calc(100vh-340px)] lg:min-h-[560px]">
-        <div className="flex flex-col gap-3 min-h-0">
+      {/* Uma coluna só, igual ao painel de atendimentos que a loja usava: o
+          filtro (busca + Situação/Ordem/...) embutido no topo e embaixo a fila
+          inteira (Em espera, Com você, Com a equipe) — ou, em Finalizados, as
+          conversas antigas. O chat ao lado. */}
+      <div className="grid grid-cols-1 lg:grid-cols-[340px_minmax(0,1fr)] xl:grid-cols-[400px_minmax(0,1fr)] 2xl:grid-cols-[440px_minmax(0,1fr)] gap-4 lg:h-[calc(100vh-340px)] lg:min-h-[560px]">
+        {/* Sem overflow-hidden: o painel de filtros sai por cima da borda. */}
+        <div className="rounded-2xl border border-wa-border bg-wa-list flex flex-col min-h-0 max-h-[75vh] lg:max-h-none">
           <SupportFilters
             filters={filters}
             canSeeFinished={canSeeFinished}
@@ -347,69 +348,68 @@ export default async function WhatsappSuportePage({
             sectors={sectorOptions}
             agents={agentUsers.map((u) => ({ id: u.id, label: u.name }))}
             lines={WHATSAPP_LINES.map((l) => ({ id: l.id as string, label: l.label }))}
+            count={finished ? finishedTotal : open.length}
             fromUrl={filtersFromUrl}
             save={saveSupportFilters}
-          />
+          >
+            {!finished && (
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div className="inline-flex rounded-full bg-wa-panel p-0.5">
+                  {(["fila", "atrasadas"] as const).map((t) => (
+                    <form key={t} action={setSupportTab.bind(null, t)}>
+                      <button
+                        type="submit"
+                        aria-pressed={tab === t}
+                        className={`inline-flex items-center gap-1.5 rounded-full px-2 py-1 text-xs font-medium transition-colors ${
+                          tab === t ? "bg-wa-green/20 text-wa-green" : "text-wa-muted hover:text-wa-text"
+                        }`}
+                      >
+                        {t === "fila" ? "Fila" : "Sem resposta +4h"}
+                        {t === "atrasadas" && overdue.length > 0 && (
+                          <span className="min-w-[18px] rounded-full bg-[rgb(244,63,94)] px-1 text-center text-[11px] font-semibold leading-[18px] text-white">
+                            {overdue.length}
+                          </span>
+                        )}
+                      </button>
+                    </form>
+                  ))}
+                </div>
+                {canManageQueue && (
+                  <div className="inline-flex rounded-full bg-wa-panel p-0.5">
+                    {(["mine", "team"] as const).map((v) => (
+                      <form key={v} action={setSupportView.bind(null, v)}>
+                        <button
+                          type="submit"
+                          aria-pressed={view === v}
+                          className={`rounded-full px-2 py-1 text-xs font-medium transition-colors ${
+                            view === v ? "bg-wa-green/20 text-wa-green" : "text-wa-muted hover:text-wa-text"
+                          }`}
+                        >
+                          {v === "mine" ? "Meus" : "Equipe"}
+                        </button>
+                      </form>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
+          </SupportFilters>
           {finished ? (
             <FinishedList
               conversations={finishedConversations}
               activeId={activeId}
               page={page}
               pages={finishedPages}
-              total={finishedTotal}
               now={now}
             />
           ) : (
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-1 lg:grid-rows-2 xl:grid-cols-2 xl:grid-rows-1 gap-4 flex-1 min-h-0">
-              <QueueColumns
-                sections={sections}
-                activeId={activeId}
-                userId={session.userId}
-                overdue={overdue}
-                showOverdue={tab === "atrasadas"}
-                waitingToolbar={
-                  <div className="flex gap-1 px-3 py-2 border-b border-wa-border bg-wa-list">
-                    {(["fila", "atrasadas"] as const).map((t) => (
-                      <form key={t} action={setSupportTab.bind(null, t)} className="flex-1">
-                        <button
-                          type="submit"
-                          aria-pressed={tab === t}
-                          className={`w-full inline-flex items-center justify-center gap-1.5 rounded-full px-2 py-1 text-xs font-medium transition-colors ${
-                            tab === t ? "bg-wa-green/20 text-wa-green" : "bg-wa-panel text-wa-muted hover:text-wa-text"
-                          }`}
-                        >
-                          {t === "fila" ? "Em espera" : "Sem resposta +4h"}
-                          {t === "atrasadas" && overdue.length > 0 && (
-                            <span className="min-w-[18px] rounded-full bg-[rgb(244,63,94)] px-1 text-[11px] font-semibold leading-[18px] text-white">
-                              {overdue.length}
-                            </span>
-                          )}
-                        </button>
-                      </form>
-                    ))}
-                  </div>
-                }
-                currentToolbar={
-                  canManageQueue ? (
-                    <div className="flex gap-1 px-3 py-2 border-b border-wa-border bg-wa-list">
-                      {(["mine", "team"] as const).map((v) => (
-                        <form key={v} action={setSupportView.bind(null, v)} className="flex-1">
-                          <button
-                            type="submit"
-                            aria-pressed={view === v}
-                            className={`w-full rounded-full px-2 py-1 text-xs font-medium transition-colors ${
-                              view === v ? "bg-wa-green/20 text-wa-green" : "bg-wa-panel text-wa-muted hover:text-wa-text"
-                            }`}
-                          >
-                            {v === "mine" ? "Meus" : "Equipe"}
-                          </button>
-                        </form>
-                      ))}
-                    </div>
-                  ) : undefined
-                }
-              />
-            </div>
+            <QueueList
+              sections={sections}
+              activeId={activeId}
+              userId={session.userId}
+              overdue={overdue}
+              showOverdue={tab === "atrasadas"}
+            />
           )}
         </div>
 

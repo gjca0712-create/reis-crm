@@ -132,8 +132,8 @@ export function effectiveSupportFilters(
 const MAX_INT = 2_147_483_647;
 
 // Filtro no banco, somado ao da fila (queueListWhere). Situação, setores,
-// linhas e busca valem pras duas colunas; atendente só pras conversas que já
-// estão com alguém (a coluna Em espera continua mostrando quem espera).
+// linhas e busca valem pra fila inteira; atendente só pras conversas que já
+// estão com alguém (a parte Em espera continua mostrando quem espera).
 export function supportFilterWhere(f: SupportFilters): Prisma.ConversationWhereInput {
   const and: Prisma.ConversationWhereInput[] = [
     f.status === "finalizados" ? { status: "RESOLVED" } : { status: { not: "RESOLVED" } },

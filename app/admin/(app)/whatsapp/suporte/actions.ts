@@ -102,7 +102,7 @@ export async function claimConversation(conversationId: string) {
   redirect(`/admin/whatsapp/suporte?c=${conversationId}${lostRace ? "&aviso=ja-assumida" : ""}`);
 }
 
-// Visão da coluna Em atendimento pra CEO/Gerente: "mine" (só as dele, padrão)
+// Visão da fila pra CEO/Gerente: "mine" (espera + as dele, padrão)
 // ou "team" (supervisão). Guardada em cookie — ver QUEUE_VIEW_COOKIE. Pros
 // demais o cookie é ignorado (seesWholeTeam), então nem precisa checar aqui.
 export async function setSupportView(view: QueueView) {
@@ -116,7 +116,7 @@ export async function setSupportView(view: QueueView) {
   revalidatePath("/admin/whatsapp/suporte");
 }
 
-// Primeira coluna: "Em espera" (fila) ou "Sem resposta +4h". Em cookie, igual
+// Aba da fila: "Fila" (tudo) ou "Sem resposta +4h". Em cookie, igual
 // ao Meus/Equipe, pra continuar na aba depois de responder/concluir.
 export async function setSupportTab(tab: QueueTab) {
   await requireFeature("whatsapp_suporte");

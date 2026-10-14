@@ -39,29 +39,24 @@ const href = (page: number, c?: string) => {
 // Situação "Finalizados" do filtro do Suporte: os atendimentos já resolvidos
 // (as conversas antigas), no formato do painel que a loja usava — linha e setor
 // em cima, quem atendeu à direita, nome com o número do atendimento, "aberto há
-// • última atividade há" e a prévia da última mensagem. 30 por página.
+// • última atividade há" e a prévia da última mensagem. 30 por página. Fica
+// embaixo do filtro, na mesma coluna da fila (o título e o total estão nele).
 export function FinishedList({
   conversations,
   activeId,
   page,
   pages,
-  total,
   now,
 }: {
   conversations: FinishedConversation[];
   activeId: string | undefined;
   page: number;
   pages: number;
-  total: number;
   now: Date;
 }) {
   return (
-    <div className="rounded-2xl border border-wa-border bg-wa-list overflow-hidden flex flex-col min-h-0 flex-1 max-h-[70vh] lg:max-h-none">
-      <div className="flex items-center justify-between gap-2 px-4 py-2 bg-wa-panel text-xs text-wa-muted">
-        <span>Atendimentos finalizados</span>
-        <span className="tabular-nums">{total}</span>
-      </div>
-      <div className="overflow-y-auto flex-1 min-h-0">
+    <>
+      <div className="overflow-y-auto flex-1 min-h-0 last:rounded-b-2xl">
         {conversations.map((c) => {
           const last = c.messages[0];
           // Finalizado com o cliente falando por último (e não era só um
@@ -137,7 +132,7 @@ export function FinishedList({
       </div>
 
       {pages > 1 && (
-        <div className="flex items-center justify-between gap-2 px-3 py-2 border-t border-wa-border bg-wa-panel text-xs text-wa-muted">
+        <div className="flex items-center justify-between gap-2 px-3 py-2 border-t border-wa-border bg-wa-panel rounded-b-2xl text-xs text-wa-muted">
           {page > 1 ? (
             <Link href={href(page - 1)} className="inline-flex items-center gap-1 hover:text-wa-text">
               <ChevronLeft className="w-4 h-4" /> Anterior
@@ -157,6 +152,6 @@ export function FinishedList({
           )}
         </div>
       )}
-    </div>
+    </>
   );
 }

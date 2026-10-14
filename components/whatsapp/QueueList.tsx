@@ -1,5 +1,4 @@
 import Link from "next/link";
-import type { ReactNode } from "react";
 import { Camera, Video, Mic, FileText } from "lucide-react";
 import { formatListTime, formatPhone, formatWaitingTime } from "@/lib/format";
 import { whatsappLineLabel } from "@/lib/whatsapp/lines";
@@ -57,116 +56,65 @@ export type QueueConversation = {
 
 type Sections<T> = { section: QueueSection; conversations: T[] }[];
 
-// As duas colunas da fila, antes do chat: "Em espera" (ninguém assumiu) e "Em
-// atendimento" (as que estão com quem está logado; na visão "Equipe" de
-// CEO/Gerente, também as dos colegas).
-// currentToolbar: faixa logo abaixo do título de Em atendimento (a chave
-// Meus/Equipe da página). Devolve as duas colunas soltas — quem posiciona é o
-// grid da página.
-// overdue + showOverdue: a primeira coluna vira "Sem resposta há +4h" (aba da
-// página); waitingToolbar é a faixa com as abas, logo abaixo do título dela.
-export function QueueColumns<T extends QueueConversation>({
+// A fila numa coluna só, embaixo do filtro (que fica no topo da mesma coluna):
+// "Em espera" (ninguém assumiu) em cima, depois "Com você" e, na visão Equipe
+// de CEO/Gerente, "Com a equipe". O título de cada parte fica preso no topo
+// enquanto rola; dentro dela, a ordem escolhida no filtro.
+// overdue + showOverdue: aba "Sem resposta +4h" — uma lista só, e cada linha
+// diz de quem é a conversa.
+export function QueueList<T extends QueueConversation>({
   sections,
   activeId,
   userId,
-  currentToolbar,
-  waitingToolbar,
   overdue = [],
   showOverdue = false,
 }: {
   sections: Sections<T>;
   activeId: string | undefined;
   userId: string;
-  currentToolbar?: ReactNode;
-  waitingToolbar?: ReactNode;
   overdue?: T[];
   showOverdue?: boolean;
 }) {
   const now = new Date();
-  const waiting = sections.find((s) => s.section === "waiting")?.conversations ?? [];
-  const current = sections.filter((s) => s.section !== "waiting");
-  const inProgress = current.reduce((n, s) => n + s.conversations.length, 0);
-  // Atendente só tem "Com você" nessa coluna: o título já diz, sem subtítulo.
-  const onlyMine = current.length === 1 && current[0].section === "mine";
-
   const row = (c: T, showOwner = false) => (
     <QueueRow key={c.id} conversation={c} active={c.id === activeId} userId={userId} now={now} showOwner={showOwner} />
   );
-  const rowsOrEmpty = (rows: T[], empty: string | undefined, showOwner = false) =>
-    rows.length > 0 ? (
-      rows.map((c) => row(c, showOwner))
-    ) : empty ? (
-      <p className="px-4 py-3 text-xs text-wa-muted">{empty}</p>
-    ) : null;
 
   return (
-    <>
+    <div className="overflow-y-auto flex-1 min-h-0 rounded-b-2xl">
       {showOverdue ? (
-        <QueueColumn
-          title="Sem resposta há +4h"
-          count={overdue.length}
-          alert={overdue.length > 0}
-          tone="critical"
-          toolbar={waitingToolbar}
-        >
-          {rowsOrEmpty(overdue, "Nenhum cliente esperando resposta há mais de 4 horas.", true)}
-        </QueueColumn>
+        overdue.length > 0 ? (
+          overdue.map((c) => row(c, true))
+        ) : (
+          <p className="px-4 py-8 text-center text-xs text-wa-muted">
+            Nenhum cliente esperando resposta há mais de 4 horas.
+          </p>
+        )
       ) : (
-        <QueueColumn title="Em espera" count={waiting.length} alert={waiting.length > 0} toolbar={waitingToolbar}>
-          {rowsOrEmpty(waiting, QUEUE_SECTION_EMPTY.waiting)}
-        </QueueColumn>
+        sections.map(({ section, conversations: rows }) => {
+          const empty = QUEUE_SECTION_EMPTY[section];
+          if (rows.length === 0 && !empty) return null;
+          return (
+            <section key={section}>
+              <div className="sticky top-0 z-10 flex items-center justify-between gap-2 border-b border-wa-border bg-wa-panel px-4 py-1.5 text-[11px] font-semibold uppercase tracking-wide text-wa-green">
+                <span>{QUEUE_SECTION_LABELS[section]}</span>
+                <span
+                  className={`min-w-[20px] rounded-full px-1.5 text-center leading-[18px] ${
+                    section === "waiting" && rows.length > 0 ? "bg-wa-green text-wa-bg" : "text-wa-muted"
+                  }`}
+                >
+                  {rows.length}
+                </span>
+              </div>
+              {rows.length > 0 ? (
+                rows.map((c) => row(c))
+              ) : (
+                <p className="px-4 py-3 text-xs text-wa-muted">{empty}</p>
+              )}
+            </section>
+          );
+        })
       )}
-
-      <QueueColumn title="Em atendimento" count={inProgress} toolbar={currentToolbar}>
-        {onlyMine
-          ? rowsOrEmpty(current[0].conversations, QUEUE_SECTION_EMPTY.mine)
-          : current.map(({ section, conversations: rows }) => {
-              const empty = QUEUE_SECTION_EMPTY[section];
-              if (rows.length === 0 && !empty) return null;
-              return (
-                <section key={section}>
-                  <div className="sticky top-0 z-10 flex items-center justify-between gap-2 border-b border-wa-border bg-wa-list px-4 py-1.5 text-[11px] font-semibold uppercase tracking-wide text-wa-green">
-                    <span>{QUEUE_SECTION_LABELS[section]}</span>
-                    <span>{rows.length}</span>
-                  </div>
-                  {rowsOrEmpty(rows, empty)}
-                </section>
-              );
-            })}
-      </QueueColumn>
-    </>
-  );
-}
-
-function QueueColumn({
-  title,
-  count,
-  alert = false,
-  tone = "green",
-  toolbar,
-  children,
-}: {
-  title: string;
-  count: number;
-  alert?: boolean;
-  tone?: "green" | "critical";
-  toolbar?: ReactNode;
-  children: ReactNode;
-}) {
-  return (
-    <div className="rounded-2xl border border-wa-border bg-wa-list overflow-hidden flex flex-col min-h-0 max-h-80 lg:max-h-none">
-      <div className="flex items-center justify-between gap-2 px-4 py-3 bg-wa-panel">
-        <h2 className="text-[15px] font-medium text-wa-text">{title}</h2>
-        <span
-          className={`min-w-[22px] rounded-full px-1.5 text-center text-xs font-semibold leading-[22px] ${
-            alert ? (tone === "critical" ? "bg-[rgb(244,63,94)] text-white" : "bg-wa-green text-wa-bg") : "bg-wa-active text-wa-muted"
-          }`}
-        >
-          {count}
-        </span>
-      </div>
-      {toolbar}
-      <div className="overflow-y-auto flex-1 min-h-0">{children}</div>
     </div>
   );
 }
@@ -207,7 +155,7 @@ function waitingSince(messages: ListMessage[]): Date | null {
 // Uma linha da lista, no formato do WhatsApp: foto (inicial), nome e hora da
 // última mensagem em cima, prévia embaixo. Sem resposta: nome em negrito, hora
 // verde e o tempo de espera no lugar do contador de não lidas.
-// showOwner: na aba +4h a coluna não diz de quem é a conversa — a linha diz
+// showOwner: na aba +4h a lista não diz de quem é a conversa — a linha diz
 // (Com você / Em espera / Com colega).
 function QueueRow({
   conversation: c,
@@ -232,7 +180,7 @@ function QueueRow({
   const details = [
     whatsappLineLabel(c.line),
     c.sector && sectorLabel(c.sector),
-    // Com você já é a coluna; aqui só quando é de um colega (ou na aba +4h).
+    // Com você já é a parte da lista; aqui só quando é de um colega (ou na aba +4h).
     showOwner
       ? c.assignedTo
         ? c.assignedTo.id === userId

@@ -16,13 +16,15 @@ import {
 type Option = { id: string; label: string };
 type Menu = "sectors" | "agents" | "lines" | null;
 
-// Topo das listas do Suporte: busca nas mensagens, título com a situação
-// escolhida, botão de limpar e o painel de filtros (cada mudança já aplica,
-// igual ao painel de atendimentos que a loja usava). A escolha vai pro cookie
-// pela action save, que atualiza a tela no lugar.
+// Topo da coluna da fila do Suporte, embutido nela como no painel de
+// atendimentos que a loja usava: busca nas mensagens, título com a situação
+// escolhida (e o total), botão de limpar e o painel de filtros (cada mudança
+// já aplica). A escolha vai pro cookie pela action save, que atualiza a tela
+// no lugar.
 // canSeeFinished: CEO/Gerente — mostra "Situação" (Em aberto | Finalizados).
 // agentFilter: onde o filtro de atendente vale ("finalizados" = só lá).
 // fromUrl: os filtros vieram de um link — grava no cookie e limpa a URL.
+// children: faixa embaixo do título (as abas da fila, na página).
 export function SupportFilters({
   filters,
   canSeeFinished,
@@ -30,8 +32,10 @@ export function SupportFilters({
   sectors,
   agents,
   lines,
+  count,
   fromUrl = false,
   save,
+  children,
 }: {
   filters: Filters;
   canSeeFinished: boolean;
@@ -39,8 +43,10 @@ export function SupportFilters({
   sectors: Option[];
   agents: Option[];
   lines: Option[];
+  count?: number;
   fromUrl?: boolean;
   save: (query: string) => Promise<void>;
+  children?: ReactNode;
 }) {
   const router = useRouter();
   const pathname = usePathname();
@@ -113,7 +119,7 @@ export function SupportFilters({
   const showAgents = agentFilter === "always" || (agentFilter === "finalizados" && current.status === "finalizados");
 
   return (
-    <div ref={box} className="relative shrink-0 rounded-2xl border border-wa-border bg-wa-list px-3 pt-3 pb-2.5">
+    <div ref={box} className="shrink-0 border-b border-wa-border px-3 pt-3 pb-2.5">
       <form
         role="search"
         onSubmit={(e) => {
@@ -145,9 +151,14 @@ export function SupportFilters({
         )}
       </form>
 
-      <div className="mt-2.5 flex items-center justify-between gap-2">
+      <div className="relative mt-2.5 flex items-center justify-between gap-2">
         <h2 className="flex items-center gap-2 text-lg font-medium text-wa-text">
           {title}
+          {count !== undefined && (
+            <span className="min-w-[22px] rounded-full bg-wa-active px-1.5 text-center text-xs font-semibold leading-[22px] text-wa-muted tabular-nums">
+              {count}
+            </span>
+          )}
           {pending && <Loader2 className="w-4 h-4 animate-spin text-wa-muted" aria-label="Carregando" />}
         </h2>
         <div className="flex items-center gap-1.5">
@@ -182,69 +193,71 @@ export function SupportFilters({
             <ListFilter className="w-4 h-4" />
           </button>
         </div>
+
+        {open && (
+          <div className="absolute right-0 top-full mt-1.5 z-30 w-[330px] max-w-full rounded-xl border border-wa-border bg-wa-panel shadow-2xl p-4 space-y-3">
+            {canSeeFinished && (
+              <Row label="Situação">
+                <Select
+                  label="Situação"
+                  value={current.status}
+                  options={SUPPORT_STATUSES}
+                  onChange={(v) => apply({ status: v as Filters["status"] })}
+                />
+              </Row>
+            )}
+            <Row label="Ordenar por">
+              <Select
+                label="Ordenar por"
+                value={current.order}
+                options={ordersFor(current.status)}
+                onChange={(v) => apply({ order: v as Filters["order"] })}
+              />
+            </Row>
+            {sectors.length > 1 && (
+              <Row label="Departamentos">
+                <MultiSelect
+                  label="Departamentos"
+                  options={sectors}
+                  value={current.sectors}
+                  open={menu === "sectors"}
+                  onToggle={() => setMenu(menu === "sectors" ? null : "sectors")}
+                  onChange={(v) => apply({ sectors: v.length === sectors.length ? [] : v })}
+                />
+              </Row>
+            )}
+            {showAgents && agents.length > 0 && (
+              <Row label="Atendentes">
+                <MultiSelect
+                  label="Atendentes"
+                  options={agents}
+                  value={current.agents}
+                  open={menu === "agents"}
+                  onToggle={() => setMenu(menu === "agents" ? null : "agents")}
+                  onChange={(v) => apply({ agents: v.length === agents.length ? [] : v })}
+                />
+              </Row>
+            )}
+            <Row label="Caixas de entrada">
+              <MultiSelect
+                label="Caixas de entrada"
+                options={lines}
+                value={current.lines}
+                open={menu === "lines"}
+                onToggle={() => setMenu(menu === "lines" ? null : "lines")}
+                onChange={(v) => apply({ lines: v.length === lines.length ? [] : v })}
+              />
+            </Row>
+            {current.order === "chegada" && (
+              <p className="text-[11px] leading-snug text-wa-muted">
+                Quem espera resposta há mais tempo fica em cima; as já respondidas vêm depois.
+              </p>
+            )}
+          </div>
+        )}
       </div>
 
-      {open && (
-        <div className="absolute left-3 top-full mt-1.5 z-30 w-[330px] max-w-[calc(100vw-48px)] rounded-xl border border-wa-border bg-wa-panel shadow-2xl p-4 space-y-3">
-          {canSeeFinished && (
-            <Row label="Situação">
-              <Select
-                label="Situação"
-                value={current.status}
-                options={SUPPORT_STATUSES}
-                onChange={(v) => apply({ status: v as Filters["status"] })}
-              />
-            </Row>
-          )}
-          <Row label="Ordenar por">
-            <Select
-              label="Ordenar por"
-              value={current.order}
-              options={ordersFor(current.status)}
-              onChange={(v) => apply({ order: v as Filters["order"] })}
-            />
-          </Row>
-          {sectors.length > 1 && (
-            <Row label="Departamentos">
-              <MultiSelect
-                label="Departamentos"
-                options={sectors}
-                value={current.sectors}
-                open={menu === "sectors"}
-                onToggle={() => setMenu(menu === "sectors" ? null : "sectors")}
-                onChange={(v) => apply({ sectors: v.length === sectors.length ? [] : v })}
-              />
-            </Row>
-          )}
-          {showAgents && agents.length > 0 && (
-            <Row label="Atendentes">
-              <MultiSelect
-                label="Atendentes"
-                options={agents}
-                value={current.agents}
-                open={menu === "agents"}
-                onToggle={() => setMenu(menu === "agents" ? null : "agents")}
-                onChange={(v) => apply({ agents: v.length === agents.length ? [] : v })}
-              />
-            </Row>
-          )}
-          <Row label="Caixas de entrada">
-            <MultiSelect
-              label="Caixas de entrada"
-              options={lines}
-              value={current.lines}
-              open={menu === "lines"}
-              onToggle={() => setMenu(menu === "lines" ? null : "lines")}
-              onChange={(v) => apply({ lines: v.length === lines.length ? [] : v })}
-            />
-          </Row>
-          {current.order === "chegada" && (
-            <p className="text-[11px] leading-snug text-wa-muted">
-              Quem espera resposta há mais tempo fica em cima; as já respondidas vêm depois.
-            </p>
-          )}
-        </div>
-      )}
+      {children && <div className="mt-2.5">{children}</div>}
     </div>
   );
 }
