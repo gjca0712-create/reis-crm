@@ -15,7 +15,7 @@ export const CHAT_WALLPAPER = "bg-[radial-gradient(rgba(255,255,255,0.035)_1px,t
 const MEDIA_LABELS: Record<string, string> = { image: "foto", video: "vídeo", audio: "áudio", document: "documento" };
 
 export type TimelineMessage = Message & { sender: { name: string } | null };
-export type TimelineTransfer = ConversationTransfer & { byUser: { name: string } };
+export type TimelineTransfer = ConversationTransfer & { byUser: { name: string }; toUser?: { name: string } | null };
 
 export function ChatTimeline({
   messages,
@@ -56,8 +56,12 @@ export function ChatTimeline({
                 <div className="max-w-[85%] rounded-lg bg-wa-note px-3 py-2 text-center text-[12.5px] shadow-sm">
                   <p className="flex items-center justify-center gap-1.5 text-[#ffd279]">
                     <ArrowRightLeft className="w-3.5 h-3.5 shrink-0" />
-                    {t.byUser.name} transferiu de {sectorLabel(t.fromSector)} para {sectorLabel(t.toSector)} ·{" "}
-                    {formatTime(t.createdAt)}
+                    {t.toUser
+                      ? `${t.byUser.name} transferiu para ${t.toUser.name}${
+                          t.toSector !== t.fromSector ? ` (${sectorLabel(t.toSector)})` : ""
+                        }`
+                      : `${t.byUser.name} transferiu de ${sectorLabel(t.fromSector)} para ${sectorLabel(t.toSector)}`}{" "}
+                    · {formatTime(t.createdAt)}
                   </p>
                   <p className="mt-1 text-wa-text whitespace-pre-wrap">Motivo: {t.reason}</p>
                 </div>

@@ -30,7 +30,8 @@ model User {
   assignedConversations Conversation[] @relation("AssignedConversations")
   ratings               Rating[]
   occurrencesReported   Occurrence[]
-  conversationTransfers ConversationTransfer[]
+  conversationTransfers ConversationTransfer[] @relation("TransfersMade")
+  transfersReceived     ConversationTransfer[] @relation("TransfersReceived")
   teamMessages          TeamMessage[]
 }
 
@@ -191,17 +192,23 @@ model Conversation {
   transfers ConversationTransfer[]
 }
 
-// Transferência de uma conversa pra outro setor, com o motivo escrito por quem
-// transferiu. Aparece no meio da conversa, na hora em que aconteceu.
+// Transferência de uma conversa pra outro setor ou direto pra um atendente, com
+// o motivo escrito por quem transferiu. Aparece no meio da conversa, na hora em
+// que aconteceu.
 model ConversationTransfer {
   id             String       @id @default(cuid())
   conversationId String
   conversation   Conversation @relation(fields: [conversationId], references: [id])
   fromSector     String?
-  toSector       String
+  // Setor da conversa depois da transferência (null = Geral).
+  toSector       String?
+  // Preenchido quando foi pra um atendente: a conversa já chega assumida por ele.
+  // null = foi pra fila de espera do setor.
+  toUserId       String?
+  toUser         User?        @relation("TransfersReceived", fields: [toUserId], references: [id])
   reason         String
   byUserId       String
-  byUser         User         @relation(fields: [byUserId], references: [id])
+  byUser         User         @relation("TransfersMade", fields: [byUserId], references: [id])
   createdAt      DateTime     @default(now())
 
   @@index([conversationId])

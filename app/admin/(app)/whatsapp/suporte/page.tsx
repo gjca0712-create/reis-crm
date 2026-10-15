@@ -7,6 +7,7 @@ import { getAllWhatsAppStates, ensureAllWhatsAppStarted } from "@/lib/whatsapp/c
 import { WHATSAPP_LINES, whatsappLineLabel } from "@/lib/whatsapp/lines";
 import { SECTORS, sectorLabel } from "@/lib/whatsapp/sectors";
 import { qrToDataUrl } from "@/lib/whatsapp/qr";
+import { transferAgents } from "@/lib/whatsapp/transfer";
 import { canManageQueue as managesQueue, sentMessagePermissions } from "@/lib/whatsapp/message-permissions";
 import {
   QUEUE_TAB_COOKIE,
@@ -216,7 +217,10 @@ export default async function WhatsappSuportePage({
           resolvedBy: { select: { name: true } },
           assignedTo: { select: { id: true, name: true } },
           messages: { orderBy: { createdAt: "asc" }, include: { sender: { select: { name: true } } } },
-          transfers: { orderBy: { createdAt: "asc" }, include: { byUser: { select: { name: true } } } },
+          transfers: {
+            orderBy: { createdAt: "asc" },
+            include: { byUser: { select: { name: true } }, toUser: { select: { name: true } } },
+          },
         },
       })
     : null;
@@ -227,6 +231,12 @@ export default async function WhatsappSuportePage({
     activeRaw && (queueBlockReason(viewer, activeRaw) || (activeRaw.status === "RESOLVED" && !canSeeFinished))
       ? null
       : activeRaw;
+  // "Transferir > Para um atendente": todo mundo com o Suporte, menos quem está
+  // vendo e quem já está com a conversa.
+  const transferAgentOptions =
+    active?.status === "OPEN"
+      ? (await transferAgents()).filter((a) => a.id !== session.userId && a.id !== active.assignedTo?.id)
+      : [];
 
   return (
     <div className="space-y-4">
@@ -470,6 +480,8 @@ export default async function WhatsappSuportePage({
                       key={active.id}
                       action={transferConversation.bind(null, active.id)}
                       currentSector={active.sector}
+                      currentAgent={active.assignedTo?.name ?? null}
+                      agents={transferAgentOptions}
                     />
                   )}
                   {active.status === "OPEN" && (

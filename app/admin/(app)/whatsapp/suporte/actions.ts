@@ -51,7 +51,7 @@ import {
   supportFiltersQuery,
   type SupportFilters,
 } from "@/lib/whatsapp/filters";
-import { transferConversationAs } from "@/lib/whatsapp/transfer";
+import { transferConversationAs, transferToAgentAs } from "@/lib/whatsapp/transfer";
 import { logAudit } from "@/lib/audit";
 
 // Conversa assumida por OUTRO atendente, ou transferida pra outro setor — a
@@ -327,8 +327,9 @@ export async function startConversation(
   return outcome;
 }
 
-// --- Transferir pra outro setor ---------------------------------------------------
-// Regras em lib/whatsapp/transfer.ts. Sem redirect, igual à Nova conversa:
+// --- Transferir pra outro setor ou pra um atendente --------------------------------
+// Regras em lib/whatsapp/transfer.ts. to=agent manda pro atendente escolhido
+// (agent); senão, pra fila do setor (sector). Sem redirect, igual à Nova conversa:
 // dando erro, a janela continua aberta com o texto; dando certo, a tela abre a
 // próxima da fila (next).
 export type TransferResult = { error: string } | { next: string | null } | undefined;
@@ -340,12 +341,11 @@ export async function transferConversation(
 ): Promise<TransferResult> {
   const session = await requireFeature("whatsapp_suporte");
   const viewer = await loadQueueViewer(session);
-  const result = await transferConversationAs(
-    viewer,
-    conversationId,
-    String(formData.get("sector") || ""),
-    String(formData.get("reason") || "")
-  );
+  const reason = String(formData.get("reason") || "");
+  const result =
+    formData.get("to") === "agent"
+      ? await transferToAgentAs(viewer, conversationId, String(formData.get("agent") || ""), reason)
+      : await transferConversationAs(viewer, conversationId, String(formData.get("sector") || ""), reason);
   if ("error" in result) return result;
 
   revalidatePath("/admin/whatsapp/suporte");

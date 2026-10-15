@@ -205,11 +205,21 @@ async function processInboundWhatsAppMessageLocked(
   // está com um atendente (ninguém clicou em Resolvido): a conversa sai dele e
   // volta pra Em espera do mesmo setor — quem estava com ela pode nem estar
   // mais de turno. Agradecimento não precisa de resposta, então não solta.
+  // Transferida direto pra esse atendente nas últimas 24h não conta como
+  // parada: ele acabou de receber.
   const backToQueue =
     conversation?.status === "OPEN" &&
     conversation.assignedToId !== null &&
     Date.now() - conversation.lastMessageAt.getTime() > STALE_ASSIGNMENT_MS &&
-    closingKind(text, media?.type) !== "thanks";
+    closingKind(text, media?.type) !== "thanks" &&
+    !(await prisma.conversationTransfer.findFirst({
+      where: {
+        conversationId: conversation.id,
+        toUserId: conversation.assignedToId,
+        createdAt: { gt: new Date(Date.now() - STALE_ASSIGNMENT_MS) },
+      },
+      select: { id: true },
+    }));
 
   const target =
     conversation && (conversation.status !== "RESOLVED" || closingAfterResolved)
