@@ -4,6 +4,7 @@ import { formatPhone } from "@/lib/format";
 import type { WhatsAppLineId } from "./lines";
 import type { MediaCategory } from "./media";
 import { closingKind } from "./closing";
+import { touchSupport } from "./live";
 
 // Até quanto tempo depois da última mensagem um "obrigado" ainda conta como
 // despedida da conversa resolvida (e não como assunto novo).
@@ -139,6 +140,7 @@ export async function processInboundWhatsAppMessage(
 ): Promise<void> {
   if (!phone || (!text && !extras.media)) return;
   await withPhoneLock(phone, () => processInboundWhatsAppMessageLocked(line, phone, text, extras));
+  touchSupport();
 }
 
 async function processInboundWhatsAppMessageLocked(
@@ -265,6 +267,7 @@ export async function processOutboundFromPhone(
 ): Promise<void> {
   if (!phone || (!text && !extras.media)) return;
   await withPhoneLock(phone, () => processOutboundFromPhoneLocked(line, phone, text, extras));
+  touchSupport();
 }
 
 async function processOutboundFromPhoneLocked(

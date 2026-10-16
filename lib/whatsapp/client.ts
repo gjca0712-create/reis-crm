@@ -32,6 +32,7 @@ import {
 } from "./inbound";
 import { WHATSAPP_LINE_IDS, type WhatsAppLineId } from "./lines";
 import { saveMediaBuffer, mediaCategoryFromMimetype, type MediaCategory } from "./media";
+import { touchSupport } from "./live";
 
 // Conexão "estilo WhatsApp Web" via Baileys (protocolo não-oficial). Isso NÃO é a
 // API oficial da Meta — aqui a gente pareia com um número real via QR code, como
@@ -413,6 +414,8 @@ export async function startWhatsAppConnection(line: WhatsAppLineId, opts?: { man
       if (r.socket !== sock) return;
 
       const { connection, lastDisconnect, qr } = update;
+      // QR novo, conectou ou caiu: o card de conexão da tela muda.
+      if (qr || connection) touchSupport();
 
       if (qr) {
         reachedReady = true;
@@ -894,6 +897,7 @@ async function handleMessageUpdate(line: WhatsAppLineId, { key, update }: WAMess
   if (update.messageStubType === WAMessageStubType.REVOKE) {
     if (fromMe) forgetSentMessage(id);
     await applyWhatsAppRevoke(line, id, fromMe);
+    touchSupport();
     return;
   }
 
@@ -907,6 +911,7 @@ async function handleMessageUpdate(line: WhatsAppLineId, { key, update }: WAMess
       replaceSentContent(line, id, { conversation: text });
     }
     await applyWhatsAppEdit(line, id, fromMe, text);
+    touchSupport();
   }
 }
 

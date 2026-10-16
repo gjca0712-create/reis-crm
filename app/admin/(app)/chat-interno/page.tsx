@@ -129,6 +129,8 @@ export default async function ChatInternoPage({ searchParams }: { searchParams: 
           {/* flex-col-reverse: a rolagem já começa no fim (mensagem mais nova),
               e a atualização automática não pula pro topo. */}
           <div className={`flex-1 overflow-y-auto flex flex-col-reverse px-4 sm:px-[6%] py-3 ${CHAT_WALLPAPER}`}>
+            {/* Mensagem que acabou de ser enviada, enquanto salva (ReplyForm). */}
+            <div id="chat-pending" />
             <div className="space-y-1.5">
               {messages.map((m, i) => {
                 const mine = m.sender.id === session.userId;
@@ -183,6 +185,7 @@ export default async function ChatInternoPage({ searchParams }: { searchParams: 
             action={sendTeamChatMessage.bind(null, target)}
             placeholder={isGeneral ? "Mensagem para toda a equipe" : `Mensagem para ${opened.other!.name.split(" ")[0]}`}
             allowAttachments={false}
+            pendingSlotId="chat-pending"
           />
         </div>
       </div>

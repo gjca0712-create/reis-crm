@@ -2,10 +2,10 @@ import { prisma } from "@/lib/prisma";
 import type { Role } from "@/lib/constants";
 import { resolveFeatures } from "@/lib/permissions";
 import { queueBlockReason, type QueueViewer } from "./queue";
-import { isSectorId, sectorLabel, TRANSFER_REASON_MIN } from "./sectors";
+import { isSectorId, sectorLabel, TRANSFER_REASON_MAX } from "./sectors";
 
-// Transferir uma conversa, com o motivo registrado no meio da conversa
-// (ConversationTransfer):
+// Transferir uma conversa, registrada no meio da conversa (ConversationTransfer)
+// com o motivo, se quem transferiu escreveu um (é opcional):
 // - pra outro setor: sai de quem estava com ela e vai pra fila de espera do setor;
 // - pra um atendente: já chega assumida por ele (aparece em "Com você" dele).
 // A server action (suporte/actions.ts) só confere a permissão e escolhe a
@@ -15,9 +15,7 @@ export type TransferOutcome = { ok: true } | { error: string };
 type Transferable = { status: string; assignedToId: string | null; sector: string | null };
 
 function reasonError(reason: string): string | null {
-  return reason.length < TRANSFER_REASON_MIN
-    ? `Descreva o motivo (pelo menos ${TRANSFER_REASON_MIN} letras) — quem recebe precisa entender o caso.`
-    : null;
+  return reason.length > TRANSFER_REASON_MAX ? `O motivo pode ter até ${TRANSFER_REASON_MAX} letras.` : null;
 }
 
 async function loadTransferable(

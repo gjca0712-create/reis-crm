@@ -8,6 +8,8 @@ import { WHATSAPP_LINES, whatsappLineLabel } from "@/lib/whatsapp/lines";
 import { SECTORS, sectorLabel } from "@/lib/whatsapp/sectors";
 import { qrToDataUrl } from "@/lib/whatsapp/qr";
 import { transferAgents } from "@/lib/whatsapp/transfer";
+import { supportVersion } from "@/lib/whatsapp/live";
+import { EARLIER_MAX, EARLIER_STEP, earlierCount, loadEarlierConversations } from "@/lib/whatsapp/history";
 import { canManageQueue as managesQueue, sentMessagePermissions } from "@/lib/whatsapp/message-permissions";
 import {
   QUEUE_TAB_COOKIE,
@@ -36,7 +38,7 @@ import {
 } from "@/lib/whatsapp/filters";
 import { Card } from "@/components/ui/Card";
 import { Badge } from "@/components/ui/Badge";
-import { AutoRefresh } from "@/components/whatsapp/AutoRefresh";
+import { LiveRefresh } from "@/components/whatsapp/LiveRefresh";
 import { ReplyForm } from "@/components/whatsapp/ReplyForm";
 import { MessageActions } from "@/components/whatsapp/MessageActions";
 import { ChatTimeline, CHAT_WALLPAPER } from "@/components/whatsapp/ChatTimeline";
@@ -86,7 +88,7 @@ const FINISHED_PAGE_SIZE = 30;
 export default async function WhatsappSuportePage({
   searchParams,
 }: {
-  searchParams: Promise<{ c?: string; aviso?: string; novo?: string; p?: string } & SupportFilterParams>;
+  searchParams: Promise<{ c?: string; aviso?: string; novo?: string; p?: string; anteriores?: string } & SupportFilterParams>;
 }) {
   const session = await requireFeature("whatsapp_suporte");
   const features = await getSessionFeatures(session);
@@ -127,7 +129,6 @@ export default async function WhatsappSuportePage({
   for (const s of waStates) {
     if (s.qr) qrByLine[s.line] = await qrToDataUrl(s.qr);
   }
-  const anyPairing = waStates.some((s) => s.status === "qr" || s.status === "connecting");
 
   const aviso = params.aviso ? (AVISOS[params.aviso] ?? null) : null;
 
@@ -231,6 +232,11 @@ export default async function WhatsappSuportePage({
     activeRaw && (queueBlockReason(viewer, activeRaw) || (activeRaw.status === "RESOLVED" && !canSeeFinished))
       ? null
       : activeRaw;
+  // Atendimentos anteriores do mesmo cliente, em cima da conversa (histórico).
+  const earlierShown = earlierCount(params.anteriores);
+  const earlier = active
+    ? await loadEarlierConversations(active, earlierShown)
+    : { conversations: [], more: 0 };
   // "Transferir > Para um atendente": todo mundo com o Suporte, menos quem está
   // vendo e quem já está com a conversa.
   const transferAgentOptions =
@@ -339,9 +345,9 @@ export default async function WhatsappSuportePage({
             </div>
           ))}
 
-        {/* Rápido enquanto espera o QR; devagar depois, só pra o inbox pegar
-            mensagens novas sem F5 manual. */}
-        <AutoRefresh intervalMs={anyPairing ? 2500 : 12000} />
+        {/* Recarrega quando algo muda (mensagem nova, colega, QR, conexão) —
+            confere a cada 2 s, ver lib/whatsapp/live.ts. */}
+        <LiveRefresh url="/api/whatsapp/versao" version={supportVersion()} />
       </Card>
 
       {/* Uma coluna só, igual ao painel de atendimentos que a loja usava: o
@@ -515,10 +521,20 @@ export default async function WhatsappSuportePage({
               {/* flex-col-reverse: a rolagem já começa no fim (mensagem mais
                   nova), e a atualização automática não pula pro topo. */}
               <div className={`flex-1 overflow-y-auto flex flex-col-reverse px-4 sm:px-[6%] py-3 ${CHAT_WALLPAPER}`}>
+                {/* Mensagem que acabou de ser enviada, enquanto sai pro WhatsApp (ReplyForm). */}
+                <div id="wa-pending" />
                 <ChatTimeline
                   messages={active.messages}
                   transfers={active.transfers}
                   now={now}
+                  currentNumber={active.number}
+                  earlier={earlier.conversations}
+                  earlierMore={earlier.more}
+                  earlierHref={
+                    earlierShown < EARLIER_MAX
+                      ? `/admin/whatsapp/suporte?c=${active.id}&anteriores=${earlierShown + EARLIER_STEP}`
+                      : undefined
+                  }
                   actionsFor={(m, senderLabel) => {
                     const rules = sentMessagePermissions(m, session);
                     if (!rules.canEdit && !rules.canDelete) return null;
@@ -561,6 +577,7 @@ export default async function WhatsappSuportePage({
                   key={`${active.id}-${active.messages.findLast((m) => m.senderId === session.userId)?.id ?? ""}`}
                   action={sendSupportReply.bind(null, active.id)}
                   placeholder={`Mensagem pela ${whatsappLineLabel(active.line)}`}
+                  pendingSlotId="wa-pending"
                 />
               )}
             </>

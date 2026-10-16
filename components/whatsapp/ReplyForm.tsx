@@ -1,7 +1,9 @@
 "use client";
 
 import { useEffect, useRef, useState, type ClipboardEvent, type ChangeEvent, type KeyboardEvent } from "react";
-import { Loader2, Mic, Paperclip, SendHorizontal, Square, Trash2, X } from "lucide-react";
+import { createPortal, useFormStatus } from "react-dom";
+import { Clock3, Loader2, Mic, Paperclip, SendHorizontal, Square, Trash2, X } from "lucide-react";
+import { EmojiPicker } from "./EmojiPicker";
 import { LEVEL_BARS, canRecordVoice, useVoiceRecorder } from "./useVoiceRecorder";
 
 // Formulário de resposta do WhatsApp Suporte. Fica num client component à
@@ -11,16 +13,21 @@ import { LEVEL_BARS, canRecordVoice, useVoiceRecorder } from "./useVoiceRecorder
 // áudio gravado (useVoiceRecorder) vai pelo mesmo campo, com voice=1.
 // Igual ao WhatsApp Web: sem texto nem anexo, o botão de enviar vira o microfone.
 // allowAttachments=false: só texto (chat interno da equipe) — sem áudio também.
+// pendingSlotId: id do lugar no fim da conversa onde a mensagem aparece na hora,
+// com o reloginho, enquanto o servidor manda pro WhatsApp (PendingBubble).
 export function ReplyForm({
   action,
   placeholder,
   allowAttachments = true,
+  pendingSlotId,
 }: {
   action: (formData: FormData) => void;
   placeholder: string;
   allowAttachments?: boolean;
+  pendingSlotId?: string;
 }) {
   const formRef = useRef<HTMLFormElement>(null);
+  const textRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const voiceFlagRef = useRef<HTMLInputElement>(null);
   const [fileName, setFileName] = useState<string | null>(null);
@@ -67,6 +74,24 @@ export function ReplyForm({
     e.currentTarget.form?.requestSubmit();
   }
 
+  // Emoji onde está o cursor (ou no lugar do texto selecionado).
+  function insertEmoji(emoji: string) {
+    const ta = textRef.current;
+    if (!ta) return;
+    ta.setRangeText(emoji, ta.selectionStart ?? ta.value.length, ta.selectionEnd ?? ta.value.length, "end");
+    ta.focus();
+    setHasText(ta.value.trim().length > 0);
+  }
+
+  // A caixa esvazia assim que envia (a mensagem já aparece na conversa, com o
+  // reloginho). Depois do evento: o React monta o FormData do envio durante ele.
+  function handleSubmit() {
+    setTimeout(() => {
+      if (textRef.current) textRef.current.value = "";
+      setHasText(false);
+    }, 0);
+  }
+
   function clearFile() {
     setFileName(null);
     if (fileInputRef.current) fileInputRef.current.value = "";
@@ -87,7 +112,8 @@ export function ReplyForm({
   const showMic = canRecord && !hasText && !fileName;
 
   return (
-    <form ref={formRef} action={action} className="bg-wa-panel px-3 py-2.5 flex flex-col gap-2">
+    <form ref={formRef} action={action} onSubmit={handleSubmit} className="bg-wa-panel px-3 py-2.5 flex flex-col gap-2">
+      {pendingSlotId && <PendingBubble slotId={pendingSlotId} />}
       {fileName && !voiceActive && (
         <div className="flex items-center justify-between gap-2 text-xs bg-wa-active rounded-lg px-3 py-1.5">
           <span className="truncate text-wa-text">📎 {fileName}</span>
@@ -127,7 +153,8 @@ export function ReplyForm({
       {voiceActive ? (
         <VoiceBar voice={voice} onSend={sendVoice} />
       ) : (
-        <div className="flex items-end gap-2">
+        <div className="flex items-end gap-2 sm:gap-1">
+          <EmojiPicker onPick={insertEmoji} className="hidden sm:block" />
           {allowAttachments && (
             <label
               htmlFor="wa-reply-media"
@@ -138,6 +165,7 @@ export function ReplyForm({
             </label>
           )}
           <textarea
+            ref={textRef}
             name="body"
             rows={1}
             placeholder={placeholder}
@@ -169,6 +197,38 @@ export function ReplyForm({
         </div>
       )}
     </form>
+  );
+}
+
+// A mensagem que acabou de ser enviada, no fim da conversa, enquanto o
+// servidor manda pro WhatsApp — some quando a tela volta com a mensagem de
+// verdade. useFormStatus traz o que está indo (o FormData do envio).
+function PendingBubble({ slotId }: { slotId: string }) {
+  const { pending, data } = useFormStatus();
+  const [slot, setSlot] = useState<HTMLElement | null>(null);
+  useEffect(() => setSlot(document.getElementById(slotId)), [slotId]);
+  if (!pending || !data || !slot) return null;
+
+  const body = String(data.get("body") || "").trim();
+  const media = data.get("media");
+  const file = media instanceof File && media.size > 0 ? media : null;
+  const label = file ? (data.get("voice") === "1" || file.type.startsWith("audio/") ? "🎤 Mensagem de voz" : `📎 ${file.name}`) : null;
+  if (!body && !label) return null;
+
+  return createPortal(
+    <div className="flex flex-col items-end pt-1.5" aria-live="polite">
+      <div className="relative max-w-[75%] rounded-lg rounded-tr-none bg-wa-out px-2.5 pt-1.5 pb-2 text-[14.2px] leading-[19px] text-wa-text shadow-sm opacity-80">
+        {label && <span className="block text-xs mb-1 opacity-90">{label}</span>}
+        {body && <span className="whitespace-pre-wrap break-words">{body}</span>}
+        <span className="invisible inline-block pl-3 text-[11px]" aria-hidden>
+          enviando 00
+        </span>
+        <span className="absolute bottom-1 right-2 inline-flex items-center gap-1 text-[11px] leading-none text-white/60">
+          enviando <Clock3 className="w-3 h-3" />
+        </span>
+      </div>
+    </div>,
+    slot
   );
 }
 

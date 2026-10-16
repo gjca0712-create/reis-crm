@@ -22,6 +22,5 @@ export function sectorLabel(id: string | null | undefined): string {
   return SECTORS.find((s) => s.id === id)?.label ?? id;
 }
 
-// Mínimo de caracteres do motivo da transferência — o setor que recebe precisa
-// entender o caso sem perguntar de novo pro cliente.
-export const TRANSFER_REASON_MIN = 10;
+// Tamanho máximo do motivo (opcional) da transferência.
+export const TRANSFER_REASON_MAX = 500;

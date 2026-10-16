@@ -3,7 +3,7 @@
 import { useActionState, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { ArrowRightLeft, X } from "lucide-react";
-import { SECTORS, TRANSFER_REASON_MIN, sectorLabel } from "@/lib/whatsapp/sectors";
+import { SECTORS, TRANSFER_REASON_MAX, sectorLabel } from "@/lib/whatsapp/sectors";
 import type { TransferAgent } from "@/lib/whatsapp/transfer";
 import type { TransferResult } from "@/app/admin/(app)/whatsapp/suporte/actions";
 
@@ -16,7 +16,7 @@ function workload(n: number): string {
 }
 
 // "Transferir" no topo da conversa: pra um atendente (já chega assumida por
-// ele) ou pra fila de um setor, sempre com o motivo (obrigatório). Mesmo esquema
+// ele) ou pra fila de um setor, com um motivo opcional. Mesmo esquema
 // da Nova conversa: <dialog> nativo, campos controlados (dando erro, o texto
 // continua lá) e, dando certo, fecha e abre a próxima conversa da fila — essa
 // saiu da tela de quem transferiu.
@@ -40,9 +40,8 @@ export function TransferDialog({
   const [agentId, setAgentId] = useState("");
   const [reason, setReason] = useState("");
   const [state, formAction, pending] = useActionState(action, undefined);
-  const reasonOk = reason.trim().length >= TRANSFER_REASON_MIN;
   const agent = agents.find((a) => a.id === agentId);
-  const ready = reasonOk && (mode === "agent" ? !!agent : !!sector);
+  const ready = mode === "agent" ? !!agent : !!sector;
 
   useEffect(() => {
     if (!state || !("next" in state)) return;
@@ -192,14 +191,12 @@ export function TransferDialog({
 
           <label className="block">
             <span className="mb-1.5 flex items-baseline justify-between text-xs font-medium text-wa-muted">
-              Motivo (obrigatório)
-              <span className={reasonOk ? "text-wa-green" : ""}>
-                {reasonOk ? "ok" : `${reason.trim().length}/${TRANSFER_REASON_MIN}`}
-              </span>
+              Motivo (opcional)
             </span>
             <textarea
               name="reason"
-              rows={3}
+              rows={2}
+              maxLength={TRANSFER_REASON_MAX}
               value={reason}
               onChange={(e) => setReason(e.target.value)}
               placeholder={

@@ -1,12 +1,16 @@
 import type { ReactNode } from "react";
-import { ArrowRightLeft, Ban } from "lucide-react";
+import Link from "next/link";
+import { ArrowRightLeft, Ban, History } from "lucide-react";
 import type { ConversationTransfer, Message } from "@prisma/client";
-import { formatDayLabel, formatTime } from "@/lib/format";
+import { formatDateTime, formatDayLabel, formatTime } from "@/lib/format";
 import { sectorLabel } from "@/lib/whatsapp/sectors";
 import { ChatImage } from "./ChatImage";
 
 // Balões da conversa (mensagens + transferências na ordem em que aconteceram),
-// com separador de dia — usado no WhatsApp Suporte.
+// com separador de dia — usado no WhatsApp Suporte. Em cima, os atendimentos
+// anteriores do mesmo cliente (lib/whatsapp/history.ts), só leitura: cada
+// Resolvido fecha um atendimento, e sem isso o orçamento de ontem sumia da tela
+// quando o cliente voltava hoje pra fechar a compra.
 
 // Fundo da conversa: pontinhos bem fracos, no lugar do papel de parede do WhatsApp.
 export const CHAT_WALLPAPER = "bg-[radial-gradient(rgba(255,255,255,0.035)_1px,transparent_1px)] [background-size:18px_18px]";
@@ -17,7 +21,97 @@ const MEDIA_LABELS: Record<string, string> = { image: "foto", video: "vídeo", a
 export type TimelineMessage = Message & { sender: { name: string } | null };
 export type TimelineTransfer = ConversationTransfer & { byUser: { name: string }; toUser?: { name: string } | null };
 
+export type EarlierConversation = {
+  id: string;
+  number: number;
+  status: string;
+  resolvedAt: Date | null;
+  resolvedBy: { name: string } | null;
+  // Preenchido quando foi em outra linha que não a do atendimento atual.
+  lineLabel?: string;
+  messages: TimelineMessage[];
+  transfers: TimelineTransfer[];
+  // Só as últimas mensagens desse atendimento vieram (era comprido demais).
+  truncated: boolean;
+};
+
+function AtendimentoDivider({ children, current = false }: { children: ReactNode; current?: boolean }) {
+  return (
+    <div className="flex items-center gap-3 py-2">
+      <span className="h-px flex-1 bg-wa-border" />
+      <span
+        className={`inline-flex items-center gap-1.5 rounded-full px-3 py-1 text-[12px] shadow-sm ${
+          current ? "bg-wa-green/15 text-wa-green font-medium" : "bg-wa-note text-wa-muted"
+        }`}
+      >
+        {!current && <History className="w-3.5 h-3.5 shrink-0" />}
+        {children}
+      </span>
+      <span className="h-px flex-1 bg-wa-border" />
+    </div>
+  );
+}
+
+function earlierLabel(c: EarlierConversation): string {
+  const end =
+    c.status === "RESOLVED"
+      ? `finalizado${c.resolvedBy ? ` por ${c.resolvedBy.name}` : ""}${c.resolvedAt ? ` em ${formatDateTime(c.resolvedAt)}` : ""}`
+      : "ainda em aberto";
+  return `Atendimento anterior #${c.number} · ${end}${c.lineLabel ? ` · ${c.lineLabel}` : ""}`;
+}
+
 export function ChatTimeline({
+  messages,
+  transfers,
+  now,
+  actionsFor,
+  currentNumber,
+  earlier = [],
+  earlierMore = 0,
+  earlierHref,
+}: {
+  messages: TimelineMessage[];
+  transfers: TimelineTransfer[];
+  now: Date;
+  actionsFor?: (m: TimelineMessage, senderLabel: string) => ReactNode;
+  currentNumber?: number;
+  earlier?: EarlierConversation[];
+  // Quantos atendimentos ainda mais antigos ficaram de fora, e o link que os traz.
+  earlierMore?: number;
+  earlierHref?: string;
+}) {
+  if (!earlier.length) {
+    return <TimelineItems messages={messages} transfers={transfers} now={now} actionsFor={actionsFor} />;
+  }
+  return (
+    <div className="space-y-1.5">
+      {earlierMore > 0 && earlierHref && (
+        <div className="flex justify-center py-2">
+          <Link
+            href={earlierHref}
+            scroll={false}
+            className="rounded-full bg-wa-panel px-3.5 py-1.5 text-xs font-medium text-wa-green shadow-sm hover:bg-wa-active"
+          >
+            Ver atendimentos mais antigos ({earlierMore})
+          </Link>
+        </div>
+      )}
+      {earlier.map((c) => (
+        <section key={c.id} aria-label={`Atendimento anterior #${c.number}`} className="space-y-1.5">
+          <AtendimentoDivider>{earlierLabel(c)}</AtendimentoDivider>
+          {c.truncated && (
+            <p className="text-center text-[11px] text-wa-muted">Só as últimas mensagens desse atendimento.</p>
+          )}
+          <TimelineItems messages={c.messages} transfers={c.transfers} now={now} />
+        </section>
+      ))}
+      <AtendimentoDivider current>Atendimento atual{currentNumber ? ` #${currentNumber}` : ""}</AtendimentoDivider>
+      <TimelineItems messages={messages} transfers={transfers} now={now} actionsFor={actionsFor} />
+    </div>
+  );
+}
+
+function TimelineItems({
   messages,
   transfers,
   now,
@@ -63,7 +157,7 @@ export function ChatTimeline({
                       : `${t.byUser.name} transferiu de ${sectorLabel(t.fromSector)} para ${sectorLabel(t.toSector)}`}{" "}
                     · {formatTime(t.createdAt)}
                   </p>
-                  <p className="mt-1 text-wa-text whitespace-pre-wrap">Motivo: {t.reason}</p>
+                  {t.reason && <p className="mt-1 text-wa-text whitespace-pre-wrap">Motivo: {t.reason}</p>}
                 </div>
               </div>
             </div>

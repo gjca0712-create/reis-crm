@@ -1,6 +1,5 @@
 "use server";
 
-import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { cookies } from "next/headers";
 import { prisma } from "@/lib/prisma";
@@ -52,6 +51,7 @@ import {
   type SupportFilters,
 } from "@/lib/whatsapp/filters";
 import { transferConversationAs, transferToAgentAs } from "@/lib/whatsapp/transfer";
+import { refreshSupport } from "@/lib/whatsapp/live";
 import { logAudit } from "@/lib/audit";
 
 // Conversa assumida por OUTRO atendente, ou transferida pra outro setor — a
@@ -99,7 +99,7 @@ export async function claimConversation(conversationId: string) {
     lostRace = Boolean(current?.assignedToId && current.assignedToId !== session.userId);
   }
 
-  revalidatePath("/admin/whatsapp/suporte");
+  refreshSupport();
   redirect(`/admin/whatsapp/suporte?c=${conversationId}${lostRace ? "&aviso=ja-assumida" : ""}`);
 }
 
@@ -114,7 +114,7 @@ export async function setSupportView(view: QueueView) {
     sameSite: "lax",
     maxAge: 60 * 60 * 24 * 365,
   });
-  revalidatePath("/admin/whatsapp/suporte");
+  refreshSupport();
 }
 
 // Aba da fila: "Fila" (tudo) ou "Sem resposta +4h". Em cookie, igual
@@ -127,7 +127,7 @@ export async function setSupportTab(tab: QueueTab) {
     sameSite: "lax",
     maxAge: 60 * 60 * 24 * 365,
   });
-  revalidatePath("/admin/whatsapp/suporte");
+  refreshSupport();
 }
 
 // Filtros do Suporte (lib/whatsapp/filters.ts): em cookie, igual à aba. Sem
@@ -137,7 +137,7 @@ export async function setSupportTab(tab: QueueTab) {
 export async function saveSupportFilters(query: string) {
   await requireFeature("whatsapp_suporte");
   await writeSupportFilters(parseSupportFiltersCookie(query.slice(0, 2000)));
-  revalidatePath("/admin/whatsapp/suporte");
+  refreshSupport();
 }
 
 async function writeSupportFilters(filters: SupportFilters) {
@@ -180,7 +180,7 @@ export async function releaseConversation(conversationId: string) {
   if (conversation.assignedToId !== session.userId && !canManageQueue(session.role)) return;
 
   await prisma.conversation.update({ where: { id: conversationId }, data: { assignedToId: null } });
-  revalidatePath("/admin/whatsapp/suporte");
+  refreshSupport();
   redirect(`/admin/whatsapp/suporte?c=${conversationId}`);
 }
 
@@ -188,7 +188,7 @@ export async function connectWhatsAppAction(line: string) {
   await requireFeature("whatsapp_suporte");
   if (!isWhatsAppLineId(line)) return;
   await startWhatsAppConnection(line, { manual: true });
-  revalidatePath("/admin/whatsapp/suporte");
+  refreshSupport();
 }
 
 // Sai de "Conectando..."/QR sem deslogar nada — pra quando a tentativa travou
@@ -197,14 +197,14 @@ export async function cancelWhatsAppConnectionAction(line: string) {
   await requireFeature("whatsapp_suporte");
   if (!isWhatsAppLineId(line)) return;
   cancelWhatsAppConnection(line);
-  revalidatePath("/admin/whatsapp/suporte");
+  refreshSupport();
 }
 
 export async function disconnectWhatsAppAction(line: string) {
   await requireFeature("whatsapp_suporte");
   if (!isWhatsAppLineId(line)) return;
   await disconnectWhatsApp(line);
-  revalidatePath("/admin/whatsapp/suporte");
+  refreshSupport();
 }
 
 // Envia de verdade se a conexão WhatsApp Web estiver ativa; sempre registra a
@@ -286,7 +286,7 @@ export async function sendSupportReply(conversationId: string, formData: FormDat
     }),
   ]);
 
-  revalidatePath("/admin/whatsapp/suporte");
+  refreshSupport();
 
   // Sempre redireciona pra normalizar a URL (tira um aviso antigo numa reenvio
   // que deu certo). Quando não sai, distingue o motivo — linha desconectada ou
@@ -322,7 +322,7 @@ export async function startConversation(
     if (filters.status === "finalizados") {
       await writeSupportFilters({ ...filters, status: "abertos", order: "atividade", agents: [] });
     }
-    revalidatePath("/admin/whatsapp/suporte");
+    refreshSupport();
   }
   return outcome;
 }
@@ -348,7 +348,7 @@ export async function transferConversation(
       : await transferConversationAs(viewer, conversationId, String(formData.get("sector") || ""), reason);
   if ("error" in result) return result;
 
-  revalidatePath("/admin/whatsapp/suporte");
+  refreshSupport();
   const { view, filters } = await queuePrefs(viewer);
   return { next: await firstInQueue(viewer, view, conversationId, filters) };
 }
@@ -407,7 +407,7 @@ export async function resolveConversation(conversationId: string) {
       : []),
   ]);
 
-  revalidatePath("/admin/whatsapp/suporte");
+  refreshSupport();
 
   const aviso =
     sent || !SEND_RATING_PROMPT
@@ -489,7 +489,7 @@ export async function editSupportMessage(
     details: { antes: message.body, depois: newBody },
   });
 
-  revalidatePath("/admin/whatsapp/suporte");
+  refreshSupport();
   return undefined;
 }
 
@@ -515,7 +515,7 @@ export async function deleteSupportMessage(messageId: string): Promise<MessageAc
   if (!ok) {
     if (message.waCaptionMessageId) {
       await removeAudioCaption(message);
-      revalidatePath("/admin/whatsapp/suporte");
+      refreshSupport();
     }
     return { aviso: "apagar-nao-enviado" };
   }
@@ -533,6 +533,6 @@ export async function deleteSupportMessage(messageId: string): Promise<MessageAc
     details: { texto: message.body, anexo: message.mediaFileName ?? message.mediaType ?? null },
   });
 
-  revalidatePath("/admin/whatsapp/suporte");
+  refreshSupport();
   return undefined;
 }
