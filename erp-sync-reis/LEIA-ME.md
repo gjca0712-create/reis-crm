@@ -43,8 +43,16 @@ pagamentos, custo da época), contas a receber e contas a pagar. As telas
    node 0-preparar.js
    ```
 
-   Ele pede a **senha do root do MySQL** uma vez. A senha não aparece enquanto
-   você digita e não fica salva em lugar nenhum. Com ela, o programa:
+   Ele pede um **usuário administrador do MySQL** e a senha dele, uma vez. A
+   senha não aparece enquanto você digita e não fica salva em lugar nenhum.
+
+   Sem a senha do `root`, use o usuário com que o próprio Órbita entra no
+   banco, o `userdba`. O usuário e a senha dele ficam no arquivo `user.config`
+   do Adm.exe, no perfil do Windows de quem usa o Órbita:
+   `%LOCALAPPDATA%\Generico\Adm.exe_Url_...\<versão>\user.config`. Abra no
+   Bloco de Notas e procure o campo da senha.
+
+   Com o usuário e a senha, o programa:
 
    - cria o usuário `crm_leitura`, que só consegue consultar, com uma senha
      aleatória;

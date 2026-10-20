@@ -110,7 +110,9 @@ async function main() {
   let admin;
   let senhaAdmin;
   try {
-    admin = (await entrada.perguntar("Usuário administrador do MySQL [root]: ")).trim() || "root";
+    // O Órbita conecta com o userdba: usuário e senha ficam no user.config do
+    // Adm.exe (ver LEIA-ME.md, passo 3).
+    admin = (await entrada.perguntar("Usuário administrador do MySQL (root ou userdba) [root]: ")).trim() || "root";
     senhaAdmin = await entrada.perguntar(`Senha do ${admin} do MySQL (não aparece enquanto digita): `, { oculto: true });
   } finally {
     entrada.fechar();
