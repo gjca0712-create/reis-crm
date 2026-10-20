@@ -471,6 +471,9 @@ model ErpSyncState {
   id         String    @id @default("erp")
   lastSyncAt DateTime?
   lastBatch  Json?
+  // Botão "Atualizar agora": o programa da loja confere a cada minuto e limpa
+  // quando termina a rodada que atendeu o pedido (ver lib/erp/sync.ts).
+  requestedAt DateTime?
 }
 
 // Pedido de orçamento capturado no site (fora deste projeto) — vem via API

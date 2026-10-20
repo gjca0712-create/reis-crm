@@ -1,7 +1,10 @@
 // Sincroniza o Órbita (MySQL deste computador, só leitura) com o CRM.
-// Roda pela tarefa agendada do Windows a cada poucos minutos (LEIA-ME.md).
+// Roda pela tarefa agendada do Windows a cada minuto (LEIA-ME.md).
 //
-//   node 2-sincronizar.js             ciclo normal: manda só o que mudou
+//   node 2-sincronizar.js             ciclo normal agora: manda só o que mudou
+//   node 2-sincronizar.js --agendado  o que a tarefa chama: só roda se alguém
+//                                     apertou "Atualizar agora" no CRM ou se já
+//                                     deu MINUTOS_ENTRE_ENVIOS desde a última
 //   node 2-sincronizar.js --simular   lê tudo e mostra o que mandaria, sem mandar
 //   node 2-sincronizar.js --tudo      esquece o que já mandou e manda tudo de novo
 //
@@ -21,7 +24,7 @@ const { carregarConfig } = require("./config");
 const { conectar } = require("./banco");
 const orbita = require("./orbita");
 const { carregarEstado, salvarEstado, estadoVazio, impressao, paraEnvio } = require("./estado");
-const { postar, enviarEmLotes, ErroFatal } = require("./crm");
+const { postar, enviarEmLotes, consultarPedido, ErroFatal } = require("./crm");
 const { horarioLojaMenosDias, paraIso } = require("./datas");
 const { abrirLog } = require("./log");
 const { travar } = require("./trava");
@@ -33,7 +36,19 @@ const LOTE = { products: 2000, sales: 300, receivables: 2000, payables: 2000 };
 const VENDAS_POR_LEITURA = 900;
 const NOMES = { products: "produto", sales: "venda", receivables: "conta a receber", payables: "conta a pagar" };
 
-async function sincronizar({ config, db, estado, log, simular = false, tudo = false, agora = Date.now(), salvar = salvarEstado }) {
+// pedido: a hora do "Atualizar agora" que esta rodada atende (ou null) — vai de
+// volta no último POST, e a tela do CRM recarrega quando ele chega.
+async function sincronizar({
+  config,
+  db,
+  estado,
+  log,
+  simular = false,
+  tudo = false,
+  pedido = null,
+  agora = Date.now(),
+  salvar = salvarEstado,
+}) {
   const quando = (dias) => horarioLojaMenosDias(dias, config.fuso, agora);
   const agoraIso = paraIso(quando(0), config.fuso);
   const avisar = (m) => log.aviso(m);
@@ -161,7 +176,8 @@ async function sincronizar({ config, db, estado, log, simular = false, tudo = fa
     fechamento.openReceivableIds = receber.filter((t) => t._aberto).map((t) => t.erpId);
     fechamento.openPayableIds = pagar.filter((t) => t._aberto).map((t) => t.erpId);
   }
-  if (completa || !falouComCrm) {
+  if (pedido) fechamento.handledRequestAt = pedido;
+  if (completa || !falouComCrm || pedido) {
     const r = await postar(config, fechamento);
     if (!r.ok) throw new Error(`CRM recusou o fechamento do ciclo (${r.status}): ${JSON.stringify(r.json).slice(0, 300)}`);
     // Estavam em aberto no CRM sem estar mais no Órbita (o CRM marcou como
@@ -191,6 +207,13 @@ async function sincronizar({ config, db, estado, log, simular = false, tudo = fa
   return resumo;
 }
 
+// Pela tarefa (de minuto em minuto), sem pedido do CRM: já deu o intervalo
+// desde o começo da última rodada? 30 s de folga pra 10 min não virar 11.
+function horaDeRodar(estado, config, agora) {
+  const ultima = estado.ultimaRodada ? Date.parse(estado.ultimaRodada) : 0;
+  return agora - ultima >= config.minutosEntreEnvios * 60_000 - 30_000;
+}
+
 function mensagemDeErro(err, config) {
   if (err instanceof ErroFatal) return err.message;
   if (err.code === "ECONNREFUSED" || err.code === "ETIMEDOUT") {
@@ -209,6 +232,7 @@ async function principal() {
   const args = new Set(process.argv.slice(2));
   const simular = args.has("--simular");
   const tudo = args.has("--tudo");
+  const agendado = args.has("--agendado") && !simular && !tudo;
   const log = abrirLog();
   let config = null;
   let db = null;
@@ -219,14 +243,20 @@ async function principal() {
     config = carregarConfig({ precisaCrm: !simular });
     soltar = travar();
     if (!soltar) {
-      log.info("Outra sincronização ainda está rodando — esta fica pra próxima.");
+      // Pela tarefa isso acontece todo minuto durante uma rodada longa: sem log.
+      if (!agendado) log.info("Outra sincronização ainda está rodando — esta fica pra próxima.");
       return;
     }
     estado = tudo ? estadoVazio() : carregarEstado();
+    const pedido = simular ? null : await consultarPedido(config);
+    if (agendado && !pedido && !horaDeRodar(estado, config, inicio)) return;
+    if (!simular) estado.ultimaRodada = new Date(inicio).toISOString();
     db = await conectar(config);
-    const r = await sincronizar({ config, db, estado, log, simular, tudo });
+    const r = await sincronizar({ config, db, estado, log, simular, tudo, pedido });
     const partes = `${r.products} produtos, ${r.sales} vendas, ${r.receivables} a receber, ${r.payables} a pagar`;
-    const extra = `${r.recusados ? `, ${r.recusados} recusados (ver avisos)` : ""}${r.completa ? " — conferência completa" : ""}`;
+    const extra =
+      `${r.recusados ? `, ${r.recusados} recusados (ver avisos)` : ""}` +
+      `${r.completa ? " — conferência completa" : ""}${pedido ? " — pedido pelo CRM" : ""}`;
     const tempo = `${Math.round((Date.now() - inicio) / 1000)} s`;
     log.info(simular ? `SIMULAÇÃO, nada foi enviado. Mandaria: ${partes}${extra} (${tempo}).` : `OK: ${partes}${extra} (${tempo}).`);
   } catch (err) {
@@ -248,4 +278,4 @@ async function principal() {
 
 if (require.main === module) principal();
 
-module.exports = { sincronizar };
+module.exports = { sincronizar, horaDeRodar };

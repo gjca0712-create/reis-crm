@@ -87,7 +87,7 @@ export default async function ProdutosPage({
     return (
       <div className="space-y-6">
         {header}
-        <ErpDataBanner mode={status.mode} lastSyncAt={status.lastSyncAt} isCeo={session.role === "CEO"} />
+        <ErpDataBanner mode={status.mode} lastSyncAt={status.lastSyncAt} syncRequested={status.syncRequested} isCeo={session.role === "CEO"} />
       </div>
     );
   }
@@ -122,7 +122,7 @@ export default async function ProdutosPage({
   return (
     <div className="space-y-6">
       {header}
-      <ErpDataBanner mode={status.mode} lastSyncAt={status.lastSyncAt} isCeo={session.role === "CEO"} />
+      <ErpDataBanner mode={status.mode} lastSyncAt={status.lastSyncAt} syncRequested={status.syncRequested} isCeo={session.role === "CEO"} />
 
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
         <StatTile

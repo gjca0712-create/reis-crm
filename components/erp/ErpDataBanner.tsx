@@ -3,6 +3,7 @@ import { formatDateTime } from "@/lib/format";
 import type { ErpDataMode } from "@/lib/erp/queries";
 import { loadDemoDataAction, clearDemoDataAction } from "@/app/admin/(app)/financeiro/actions";
 import { PendingButton } from "./PendingButton";
+import { SyncNowButton } from "./SyncNowButton";
 
 // Programa da loja manda dados a cada poucos minutos — passou disso, provavelmente parou
 // (computador do ERP desligado, sem internet...).
@@ -25,10 +26,12 @@ function ago(minutes: number) {
 export function ErpDataBanner({
   mode,
   lastSyncAt,
+  syncRequested = false,
   isCeo,
 }: {
   mode: ErpDataMode;
   lastSyncAt: Date | null;
+  syncRequested?: boolean;
   isCeo: boolean;
 }) {
   if (mode === "empty") {
@@ -84,16 +87,19 @@ export function ErpDataBanner({
   const minutes = lastSyncAt ? minutesSince(lastSyncAt) : null;
   const stale = minutes == null || minutes > STALE_AFTER_MINUTES;
   return (
-    <div
-      className={`flex items-center gap-2 text-xs ${stale ? "text-status-warning" : "text-ink-muted"}`}
-      title={lastSyncAt ? `Última sincronização: ${formatDateTime(lastSyncAt)}` : undefined}
-    >
-      {stale ? <AlertTriangle className="w-3.5 h-3.5" /> : <RefreshCw className="w-3.5 h-3.5" />}
-      {minutes == null
-        ? "Sem registro de sincronização com o ERP."
-        : stale
-          ? `Última atualização com o ERP ${ago(minutes)} — o programa da loja pode estar parado (computador do ERP desligado ou sem internet).`
-          : `Atualizado com o ERP ${ago(minutes)}.`}
+    <div className="flex items-center gap-x-3 gap-y-2 flex-wrap">
+      <div
+        className={`flex items-center gap-2 text-xs ${stale ? "text-status-warning" : "text-ink-muted"}`}
+        title={lastSyncAt ? `Última sincronização: ${formatDateTime(lastSyncAt)}` : undefined}
+      >
+        {stale ? <AlertTriangle className="w-3.5 h-3.5 shrink-0" /> : <RefreshCw className="w-3.5 h-3.5 shrink-0" />}
+        {minutes == null
+          ? "Sem registro de sincronização com o ERP."
+          : stale
+            ? `Última atualização com o ERP ${ago(minutes)} — o programa da loja pode estar parado (computador do ERP desligado ou sem internet).`
+            : `Atualizado com o ERP ${ago(minutes)}.`}
+      </div>
+      <SyncNowButton initialPending={syncRequested} />
     </div>
   );
 }

@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { createHash, timingSafeEqual } from "node:crypto";
 import { applySyncPayload, syncPayloadSchema } from "@/lib/erp/sync";
+import { pendingSyncRequest } from "@/lib/erp/sync-request";
 
 // Recebe os dados do ERP (Órbita) enviados pelo programa de sincronização que
 // roda no computador da loja — ver o contrato em lib/erp/sync.ts. Só servidor
@@ -19,6 +20,22 @@ function isAuthorized(request: Request): boolean {
   const a = createHash("sha256").update(received).digest();
   const b = createHash("sha256").update(expected).digest();
   return timingSafeEqual(a, b);
+}
+
+export const dynamic = "force-dynamic";
+
+// O programa pergunta a cada minuto: alguém apertou "Atualizar agora"?
+// Devolve a hora do pedido (o programa manda de volta no fim da rodada, em
+// handledRequestAt) ou null.
+export async function GET(request: Request) {
+  if (!isAuthorized(request)) {
+    return NextResponse.json({ error: "Não autorizado." }, { status: 401 });
+  }
+  const requestedAt = await pendingSyncRequest();
+  return NextResponse.json(
+    { requestedAt: requestedAt?.toISOString() ?? null },
+    { headers: { "Cache-Control": "no-store" } }
+  );
 }
 
 export async function POST(request: Request) {

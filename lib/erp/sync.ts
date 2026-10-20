@@ -108,6 +108,10 @@ export const syncPayloadSchema = z.object({
   payables: z.array(payableSchema).max(5000).default([]),
   openReceivableIds: z.array(erpInt).max(200_000).optional(),
   openPayableIds: z.array(erpInt).max(200_000).optional(),
+  // O pedido do "Atualizar agora" que esta rodada atendeu (o valor que o GET
+  // devolveu quando ela começou) — vem no último POST da rodada. Ver
+  // lib/erp/sync-request.ts.
+  handledRequestAt: isoDate.optional(),
 });
 
 export type SyncPayload = z.infer<typeof syncPayloadSchema>;
@@ -254,5 +258,12 @@ export async function applySyncPayload(payload: SyncPayload) {
     create: { id: "erp", lastSyncAt: now, lastBatch: counts },
     update: { lastSyncAt: now, lastBatch: counts },
   });
+  // Só limpa se ninguém pediu de novo depois que a rodada começou.
+  if (payload.handledRequestAt) {
+    await prisma.erpSyncState.updateMany({
+      where: { id: "erp", requestedAt: { lte: payload.handledRequestAt } },
+      data: { requestedAt: null },
+    });
+  }
   return { counts, closedReceivableIds, closedPayableIds };
 }

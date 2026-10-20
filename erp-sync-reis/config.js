@@ -33,6 +33,9 @@ function carregarConfig({ precisaCrm = true } = {}) {
     idEmpresa: inteiro("ID_EMPRESA", null),
     fuso,
     diasHistorico: inteiro("DIAS_HISTORICO", 365),
+    // A tarefa roda a cada minuto (pra atender o "Atualizar agora" do CRM);
+    // sem pedido, só manda de tantos em tantos minutos.
+    minutosEntreEnvios: Math.max(1, inteiro("MINUTOS_ENTRE_ENVIOS", 10)),
     crmUrl: null,
     chave: null,
   };

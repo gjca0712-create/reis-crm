@@ -3,6 +3,24 @@
 
 class ErroFatal extends Error {} // não adianta tentar de novo (chave errada, endereço errado)
 
+// Alguém apertou "Atualizar agora" no CRM? Devolve a hora do pedido (texto
+// ISO, que volta no fim da rodada como handledRequestAt) ou null. Qualquer
+// falha = null: a tarefa pergunta de novo no próximo minuto, e erro de verdade
+// (chave, internet) aparece no log quando a rodada normal tentar mandar.
+async function consultarPedido(config) {
+  try {
+    const resposta = await fetch(`${config.crmUrl}/api/erp/sync`, {
+      headers: { Authorization: `Bearer ${config.chave}` },
+      signal: AbortSignal.timeout(15_000),
+    });
+    if (!resposta.ok) return null;
+    const json = await resposta.json();
+    return typeof json?.requestedAt === "string" ? json.requestedAt : null;
+  } catch {
+    return null;
+  }
+}
+
 async function postar(config, corpo, { tentativas = 3 } = {}) {
   let ultimoErro;
   for (let t = 1; t <= tentativas; t++) {
@@ -76,4 +94,4 @@ async function enviarLote(config, tipo, lote, ganchos) {
   }
 }
 
-module.exports = { postar, enviarEmLotes, ErroFatal };
+module.exports = { postar, enviarEmLotes, consultarPedido, ErroFatal };

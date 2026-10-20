@@ -1,6 +1,7 @@
 import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { STORE_TIMEZONE, storeDayStart, type ErpPeriod } from "./period";
+import { isFreshSyncRequest } from "./sync-request";
 
 // Consultas das telas Financeiro/Produtos em cima do espelho do ERP (models
 // Erp* em prisma/schema.prisma). Agregação no próprio Postgres (SQL), não em
@@ -40,7 +41,7 @@ export type ErpDataMode = "empty" | "demo" | "live";
 // "live" assim que o ERP real começou a mandar QUALQUER coisa (a sincronização
 // cria o ErpSyncState antes de gravar) — mesmo que o primeiro lote tenha sido só
 // de contas a receber/pagar.
-export async function getErpDataStatus(): Promise<{ mode: ErpDataMode; lastSyncAt: Date | null }> {
+export async function getErpDataStatus(): Promise<{ mode: ErpDataMode; lastSyncAt: Date | null; syncRequested: boolean }> {
   const [state, demoSale, demoProduct, realSale, realProduct, realReceivable, realPayable] = await Promise.all([
     prisma.erpSyncState.findUnique({ where: { id: "erp" } }),
     prisma.erpSale.findFirst({ where: { demo: true }, select: { id: true } }),
@@ -52,7 +53,7 @@ export async function getErpDataStatus(): Promise<{ mode: ErpDataMode; lastSyncA
   ]);
   const live = state || realSale || realProduct || realReceivable || realPayable;
   const mode: ErpDataMode = live ? "live" : demoSale || demoProduct ? "demo" : "empty";
-  return { mode, lastSyncAt: state?.lastSyncAt ?? null };
+  return { mode, lastSyncAt: state?.lastSyncAt ?? null, syncRequested: isFreshSyncRequest(state?.requestedAt) };
 }
 
 // ---------------------------------------------------------------------------

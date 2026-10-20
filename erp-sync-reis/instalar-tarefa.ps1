@@ -1,15 +1,17 @@
 # Cria (ou recria) a tarefa agendada do Windows que roda a sincronizacao com o
-# CRM de tempos em tempos. Roda como SYSTEM: funciona mesmo sem ninguem logado
-# e nao abre janela na frente de quem esta usando o computador.
+# CRM. Roda como SYSTEM: funciona mesmo sem ninguem logado e nao abre janela na
+# frente de quem esta usando o computador.
+#
+# A tarefa roda a cada minuto, mas so manda dados quando alguem aperta
+# "Atualizar agora" no CRM ou quando ja deu MINUTOS_ENTRE_ENVIOS (no .env,
+# padrao 10) desde a ultima vez. Nos outros minutos ela so pergunta ao CRM e sai.
 #
 # No PowerShell COMO ADMINISTRADOR, dentro desta pasta:
 #   powershell -ExecutionPolicy Bypass -File .\instalar-tarefa.ps1
-#   powershell -ExecutionPolicy Bypass -File .\instalar-tarefa.ps1 -Minutos 15
 #   powershell -ExecutionPolicy Bypass -File .\instalar-tarefa.ps1 -Remover
 #
 # (Sem acentos de proposito: o PowerShell do Windows le .ps1 sem BOM como ANSI.)
 param(
-  [int]$Minutos = 10,
   [switch]$Remover
 )
 $ErrorActionPreference = "Stop"
@@ -39,24 +41,21 @@ foreach ($falta in @(".env", "node_modules")) {
     exit 1
   }
 }
-if ($Minutos -lt 5) {
-  Write-Host "Use pelo menos 5 minutos."
-  exit 1
-}
 if (-not (Test-Path (Join-Path $pasta "estado.json"))) {
   Write-Host "Aviso: o primeiro envio ainda nao foi feito. Ele vai acontecer pela tarefa; acompanhe em logs\."
 }
 
-$acao = New-ScheduledTaskAction -Execute $node -Argument "`"$pasta\2-sincronizar.js`"" -WorkingDirectory $pasta
+$acao = New-ScheduledTaskAction -Execute $node -Argument "`"$pasta\2-sincronizar.js`" --agendado" -WorkingDirectory $pasta
 # Sem RepetitionDuration = repete pra sempre, inclusive depois de reiniciar.
-$quando = New-ScheduledTaskTrigger -Once -At (Get-Date).AddMinutes(1) -RepetitionInterval (New-TimeSpan -Minutes $Minutos)
+$quando = New-ScheduledTaskTrigger -Once -At (Get-Date).AddMinutes(1) -RepetitionInterval (New-TimeSpan -Minutes 1)
 $quem = New-ScheduledTaskPrincipal -UserId "SYSTEM" -LogonType ServiceAccount -RunLevel Limited
-# IgnoreNew: se uma rodada demorar (o primeiro envio), a proxima espera.
+# IgnoreNew: se uma rodada demorar (o primeiro envio), os minutos seguintes esperam.
 $opcoes = New-ScheduledTaskSettingsSet -MultipleInstances IgnoreNew -StartWhenAvailable `
   -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -ExecutionTimeLimit (New-TimeSpan -Hours 2)
 
 Register-ScheduledTask -TaskName $Nome -Action $acao -Trigger $quando -Principal $quem -Settings $opcoes `
   -Description "Manda vendas, produtos e contas do Orbita (so leitura) pro CRM da Reis. Log em $pasta\logs." -Force | Out-Null
 
-Write-Host "Pronto: '$Nome' roda a cada $Minutos minutos (a primeira em 1 minuto)."
-Write-Host "Acompanhe em $pasta\logs - cada rodada escreve uma linha 'OK: ...' ou 'ERRO ...'."
+Write-Host "Pronto: '$Nome' instalada, comeca em 1 minuto."
+Write-Host "Manda dados a cada MINUTOS_ENTRE_ENVIOS (padrao 10) e atende o 'Atualizar agora' do CRM em ate 1 minuto."
+Write-Host "Acompanhe em $pasta\logs - cada envio escreve uma linha 'OK: ...' ou 'ERRO ...'."

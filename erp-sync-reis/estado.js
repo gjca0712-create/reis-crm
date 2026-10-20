@@ -20,6 +20,9 @@ function vazio() {
     // Menor id de venda que ainda pode mudar (ver 2-sincronizar.js).
     pisoVendas: null,
     ultimaConferenciaCompleta: null,
+    // Início da última rodada (deu certo ou não): a tarefa de minuto em minuto
+    // usa pra saber se já está na hora da próxima.
+    ultimaRodada: null,
   };
 }
 

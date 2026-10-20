@@ -3,7 +3,8 @@
 Programa que roda no computador do Órbita. A cada 10 minutos ele lê o banco
 (MySQL) e manda para o CRM: produtos (preço, custo, estoque), vendas (itens,
 pagamentos, custo da época), contas a receber e contas a pagar. As telas
-**Financeiro** e **Produtos** do CRM mostram esses números.
+**Financeiro** e **Produtos** do CRM mostram esses números, e o botão
+**Atualizar agora** delas faz o programa mandar na hora (em até 1 minuto).
 
 - **Só lê.** Usa um usuário do MySQL que só tem permissão de consulta: não
   grava, não altera e não apaga nada no Órbita.
@@ -107,16 +108,23 @@ pagamentos, custo da época), contas a receber e contas a pagar. As telas
     powershell -ExecutionPolicy Bypass -File .\instalar-tarefa.ps1
     ```
 
-    A tarefa roda a cada 10 minutos, mesmo sem ninguém logado, e não abre janela
-    na tela. Para outro intervalo, acrescente `-Minutos 15` ao comando.
+    A tarefa roda mesmo sem ninguém logado e não abre janela na tela. A cada
+    minuto ela pergunta ao CRM se alguém apertou **Atualizar agora**: se sim,
+    manda na hora; se não, só manda a cada 10 minutos. Para outro intervalo,
+    mude `MINUTOS_ENTRE_ENVIOS` no `.env` (não precisa reinstalar a tarefa).
 
 ## Dia a dia
 
 - No CRM, no topo do Financeiro e de Produtos, aparece **"Atualizado com o
   ERP há X min"**. Se passar de 30 min, a tela avisa que o programa pode
-  estar parado.
-- Cada rodada escreve uma linha em `logs\AAAA-MM.log`, por exemplo
-  `OK: 0 produtos, 3 vendas, 1 a receber, 0 a pagar (2 s)`. Os logs dos
+  estar parado. É normal à noite e no fim de semana, com o computador
+  desligado: os números continuam lá, só não atualizam.
+- O botão **Atualizar agora**, ao lado, pede um envio na hora. A tela recarrega
+  sozinha quando os dados chegam, em até 1 minuto. Com o computador da loja
+  desligado, ela avisa que ele não respondeu.
+- Cada envio escreve uma linha em `logs\AAAA-MM.log`, por exemplo
+  `OK: 0 produtos, 3 vendas, 1 a receber, 0 a pagar (2 s).` Os envios pedidos
+  pelo botão terminam com `— pedido pelo CRM`. Os logs dos
   últimos 6 meses ficam guardados. O log não tem nome de cliente nem valor de
   título.
 - Uma vez por dia acontece uma **conferência completa**: o programa relê o ano
@@ -140,7 +148,7 @@ pagamentos, custo da época), contas a receber e contas a pagar. As telas
 | --- | --- |
 | `node 1-conferir-banco.js` | Confere o banco (só leitura, só contagens). |
 | `node 2-sincronizar.js --simular` | Mostra o que mandaria, sem mandar. |
-| `node 2-sincronizar.js` | Uma rodada agora (o mesmo que a tarefa faz). |
+| `node 2-sincronizar.js` | Um envio agora, na mão. |
 | `node 2-sincronizar.js --tudo` | Esquece o que já mandou e manda tudo de novo. Não duplica nada no CRM. |
 | `powershell -ExecutionPolicy Bypass -File .\instalar-tarefa.ps1 -Remover` | Desliga a tarefa automática (como administrador). |
 
