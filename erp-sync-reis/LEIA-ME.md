@@ -26,8 +26,9 @@ pagamentos, custo da época), contas a receber e contas a pagar. As telas
 
 ## Instalação (uma vez)
 
-1. **Copie esta pasta** para `C:\erp-sync-reis` no computador do Órbita. Não
-   copie `node_modules`, `.env`, `estado.json` nem `logs` (se existirem).
+1. **Copie esta pasta** para `C:\erp-sync-reis` no computador do Órbita
+   (pelo AnyDesk dá pra copiar e colar). Não copie `node_modules`, `.env`,
+   `estado.json` nem `logs` (se existirem).
 
 2. **Instale as dependências.** Abra o Prompt de Comando nessa pasta e rode:
 
@@ -36,15 +37,25 @@ pagamentos, custo da época), contas a receber e contas a pagar. As telas
    npm install
    ```
 
-3. **Crie o usuário só de leitura.** Abra o `criar-usuario-leitura.sql`, troque
-   `TROQUE_ESTA_SENHA` por uma senha nova (e o nome do banco, se não for
-   `orbitadb`). Depois rode o arquivo no MySQL logado como `root` (HeidiSQL,
-   MySQL Workbench ou a linha de comando do `mysql`).
+3. **Prepare o banco e o `.env`.**
 
-4. **Crie o `.env`.** Copie o `.env.exemplo` para um arquivo chamado `.env` na
-   mesma pasta e preencha `MYSQL_SENHA` com a senha do passo 3.
+   ```bat
+   node 0-preparar.js
+   ```
 
-5. **Confira o banco.**
+   Ele pede a **senha do root do MySQL** uma vez. A senha não aparece enquanto
+   você digita e não fica salva em lugar nenhum. Com ela, o programa:
+
+   - cria o usuário `crm_leitura`, que só consegue consultar, com uma senha
+     aleatória;
+   - cria o `.env` já preenchido com esse usuário;
+   - gera a chave do CRM e mostra na tela. Copie essa chave, que vai no passo 5.
+
+   Se o banco não se chamar `orbitadb`, crie o `.env` a partir do
+   `.env.exemplo`, troque o `MYSQL_BANCO` e rode de novo. Se for o suporte do
+   Órbita quem vai criar o usuário, mande pra eles o `criar-usuario-leitura.sql`.
+
+4. **Confira o banco.**
 
    ```bat
    node 1-conferir-banco.js
@@ -60,22 +71,15 @@ pagamentos, custo da época), contas a receber e contas a pagar. As telas
    - **Os valores fecham?**: diferença entre a nota, os itens e os pagamentos.
    - **Tempo das leituras** do programa neste computador.
 
-6. **Crie a chave do CRM.** Rode:
-
-   ```bat
-   node -e "console.log(require('crypto').randomBytes(32).toString('base64url'))"
-   ```
-
-   Copie o resultado e cole em **dois lugares**:
-
-   - no `.env`, em `ERP_SYNC_KEY=`;
-   - no Railway, no serviço do CRM: **Variables → New Variable**, nome
-     `ERP_SYNC_KEY`. O Railway publica de novo sozinho; espere terminar.
+5. **Coloque a chave no Railway.** No serviço do CRM: **Variables → New
+   Variable**, nome `ERP_SYNC_KEY`, valor = a chave que o passo 3 mostrou. Ela
+   também está no `.env`, na linha `ERP_SYNC_KEY`. O Railway publica de novo
+   sozinho; espere terminar.
 
    Não mande essa chave por WhatsApp nem e-mail: quem tiver a chave consegue
    gravar dados no CRM.
 
-7. **Simule.**
+6. **Simule.**
 
    ```bat
    node 2-sincronizar.js --simular
@@ -83,7 +87,7 @@ pagamentos, custo da época), contas a receber e contas a pagar. As telas
 
    Lê tudo e mostra quanto mandaria, **sem mandar nada**.
 
-8. **Faça o primeiro envio na mão.**
+7. **Faça o primeiro envio na mão.**
 
    ```bat
    node 2-sincronizar.js
@@ -93,14 +97,14 @@ pagamentos, custo da época), contas a receber e contas a pagar. As telas
    demonstração do CRM são apagados nesse primeiro envio.** Se a internet cair
    no meio, rode de novo: ele continua de onde parou.
 
-9. **Compare com o Órbita** antes de confiar nos números:
+8. **Compare com o Órbita** antes de confiar nos números:
 
    - o faturamento de ontem e do mês no painel do Órbita contra o
      **Financeiro** do CRM;
    - o estoque e o preço de 3 produtos;
    - um cliente com conta a receber em aberto.
 
-10. **Ligue a tarefa automática.** Abra o PowerShell **como administrador**
+9. **Ligue a tarefa automática.** Abra o PowerShell **como administrador**
     (botão direito → Executar como administrador) e rode:
 
     ```bat
@@ -136,7 +140,7 @@ pagamentos, custo da época), contas a receber e contas a pagar. As telas
 | Mensagem no log | O que fazer |
 | --- | --- |
 | `MySQL não respondeu` | O MySQL/Órbita está ligado neste computador? Confira `MYSQL_HOST` e `MYSQL_PORT`. |
-| `MySQL recusou usuário/senha` | Confira `MYSQL_USUARIO` e `MYSQL_SENHA` no `.env` (passo 3). |
+| `MySQL recusou usuário/senha` | Rode `node 0-preparar.js` de novo (passo 3): ele refaz o usuário e o `.env`. |
 | `CRM recusou a chave (401)` | A `ERP_SYNC_KEY` do `.env` tem que ser exatamente a mesma do Railway. |
 | `Sem conexão com o CRM` | Sem internet. Não precisa fazer nada: a próxima rodada manda. |
 | `... recusado pelo CRM — ...` | Um registro com valor fora do normal no Órbita (preço gigante, por exemplo). Os outros seguem normais. Corrija no Órbita e ele vai sozinho. |
@@ -146,6 +150,7 @@ pagamentos, custo da época), contas a receber e contas a pagar. As telas
 
 | Comando | O que faz |
 | --- | --- |
+| `node 0-preparar.js` | Cria (ou refaz) o usuário só de leitura e o `.env`. Pede a senha do root. |
 | `node 1-conferir-banco.js` | Confere o banco (só leitura, só contagens). |
 | `node 2-sincronizar.js --simular` | Mostra o que mandaria, sem mandar. |
 | `node 2-sincronizar.js` | Um envio agora, na mão. |
@@ -156,7 +161,7 @@ pagamentos, custo da época), contas a receber e contas a pagar. As telas
 
 - O `.env` tem a senha do MySQL e a chave do CRM: não compartilhe o arquivo e
   não o copie para outros computadores.
-- Use só o usuário `crm_leitura`, nunca o `root`. A conferência (passo 5) avisa
+- Use só o usuário `crm_leitura`, nunca o `root`. A conferência (passo 4) avisa
   se o usuário puder gravar.
 - Não abra a porta 3306 do MySQL para a internet. O programa roda no mesmo
   computador do banco e não precisa disso.

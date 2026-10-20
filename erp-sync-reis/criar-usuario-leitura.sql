@@ -1,3 +1,6 @@
+-- Jeito manual (ou pro suporte do Órbita rodar) do que o `node 0-preparar.js`
+-- faz sozinho.
+--
 -- Cria o usuário que o programa usa pra LER o Órbita. Ele só consegue
 -- consultar (SELECT): não grava, não altera e não apaga nada no banco.
 --

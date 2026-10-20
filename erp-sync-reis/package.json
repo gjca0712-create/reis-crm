@@ -8,6 +8,7 @@
     "node": ">=20"
   },
   "scripts": {
+    "preparar": "node 0-preparar.js",
     "conferir": "node 1-conferir-banco.js",
     "simular": "node 2-sincronizar.js --simular",
     "sincronizar": "node 2-sincronizar.js"
