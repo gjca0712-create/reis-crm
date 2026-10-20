@@ -15,6 +15,13 @@ import { lockErpMirror } from "./lock";
 // (com `cancelado: true`) — é o único jeito do espelho saber que um título
 // deixou de valer.
 //
+// Uma vez por dia o programa manda também openReceivableIds/openPayableIds: a
+// lista COMPLETA dos títulos em aberto no Órbita. Título que está em aberto
+// aqui e não veio na lista deixou de valer lá (pago, cancelado, excluído) sem
+// o programa ter visto — fica marcado como cancelado e sai das contas, e os
+// ids voltam na resposta pro programa mandar o estado real no ciclo seguinte.
+// Cobre o programa ter perdido o arquivo do que já mandou.
+//
 // Datas vêm em ISO COM fuso (ex.: "2026-09-26T14:30:00-03:00") — o MySQL do
 // Órbita guarda horário local sem fuso, quem converte é o programa da loja.
 //
@@ -99,6 +106,8 @@ export const syncPayloadSchema = z.object({
   sales: z.array(saleSchema).max(2000).default([]),
   receivables: z.array(receivableSchema).max(5000).default([]),
   payables: z.array(payableSchema).max(5000).default([]),
+  openReceivableIds: z.array(erpInt).max(200_000).optional(),
+  openPayableIds: z.array(erpInt).max(200_000).optional(),
 });
 
 export type SyncPayload = z.infer<typeof syncPayloadSchema>;
@@ -208,11 +217,36 @@ export async function applySyncPayload(payload: SyncPayload) {
     await prisma.erpPayable.upsert({ where: { erpId: p.erpId }, create: { erpId: p.erpId, ...data }, update: data });
   }
 
+  // Depois dos upserts: título novo em aberto do mesmo envio já está gravado.
+  // ANY(array) e não IN (...): a lista pode passar do limite de parâmetros.
+  // Os ids voltam pro programa, que relê esses títulos no Órbita e manda o
+  // estado real (um pago não fica como cancelado).
+  let closedReceivableIds: number[] | undefined;
+  let closedPayableIds: number[] | undefined;
+  if (payload.openReceivableIds) {
+    const rows = await prisma.$queryRaw<{ erpId: number }[]>`
+      UPDATE "ErpReceivable" SET cancelado = true
+      WHERE demo = false AND cancelado = false AND "pagoEm" IS NULL
+        AND NOT ("erpId" = ANY(${payload.openReceivableIds}::int[]))
+      RETURNING "erpId"`;
+    closedReceivableIds = rows.map((r) => r.erpId);
+  }
+  if (payload.openPayableIds) {
+    const rows = await prisma.$queryRaw<{ erpId: number }[]>`
+      UPDATE "ErpPayable" SET cancelado = true
+      WHERE demo = false AND cancelado = false AND "pagoEm" IS NULL
+        AND NOT ("erpId" = ANY(${payload.openPayableIds}::int[]))
+      RETURNING "erpId"`;
+    closedPayableIds = rows.map((r) => r.erpId);
+  }
+
   const counts = {
     products: payload.products.length,
     sales: payload.sales.length,
     receivables: payload.receivables.length,
     payables: payload.payables.length,
+    ...(closedReceivableIds && { closedReceivables: closedReceivableIds.length }),
+    ...(closedPayableIds && { closedPayables: closedPayableIds.length }),
   };
   const now = new Date();
   await prisma.erpSyncState.upsert({
@@ -220,5 +254,5 @@ export async function applySyncPayload(payload: SyncPayload) {
     create: { id: "erp", lastSyncAt: now, lastBatch: counts },
     update: { lastSyncAt: now, lastBatch: counts },
   });
-  return counts;
+  return { counts, closedReceivableIds, closedPayableIds };
 }

@@ -42,8 +42,8 @@ export async function POST(request: Request) {
   }
 
   try {
-    const counts = await applySyncPayload(parsed.data);
-    return NextResponse.json({ ok: true, counts });
+    const result = await applySyncPayload(parsed.data);
+    return NextResponse.json({ ok: true, ...result });
   } catch (err) {
     console.error("Falha ao gravar sincronização do ERP:", err);
     return NextResponse.json({ error: "Falha ao gravar os dados." }, { status: 500 });

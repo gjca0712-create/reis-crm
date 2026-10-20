@@ -1,0 +1,19 @@
+{
+  "name": "erp-sync-reis",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Manda os dados do Órbita (MySQL da loja, só leitura) pro CRM da Reis Materiais",
+  "type": "commonjs",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "conferir": "node 1-conferir-banco.js",
+    "simular": "node 2-sincronizar.js --simular",
+    "sincronizar": "node 2-sincronizar.js"
+  },
+  "dependencies": {
+    "dotenv": "^18.0.8",
+    "mysql2": "^3.24.6"
+  }
+}
