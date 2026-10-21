@@ -17,8 +17,11 @@ function vazio() {
     vendas: {}, // idsaidanota -> hash
     receber: {}, // idrecebimento -> hash (só títulos em aberto)
     pagar: {}, // idpagamento -> hash (só títulos em aberto)
-    // Menor id de venda que ainda pode mudar (ver 2-sincronizar.js).
+    // Próximo id de venda ainda não lido (ver 2-sincronizar.js).
     pisoVendas: null,
+    // Vendas com id abaixo do piso que ainda podem mudar (em andamento ou
+    // emitidas há poucos dias): relidas pelo id todo ciclo.
+    vendasAcompanhar: [],
     ultimaConferenciaCompleta: null,
     // Início da última rodada (deu certo ou não): a tarefa de minuto em minuto
     // usa pra saber se já está na hora da próxima.
@@ -26,21 +29,42 @@ function vazio() {
   };
 }
 
-function carregarEstado() {
+// Sem estado.json = primeira vez (ou apagado): começa do zero. Arquivo
+// estragado (luz que caiu no meio da gravação) vai pro lado como
+// estado.json.estragado e também começa do zero. Qualquer outro erro de
+// leitura (antivírus segurando o arquivo...) para a rodada: começar do zero à
+// toa reenviaria tudo.
+function carregarEstado({ avisar = () => {} } = {}) {
+  let texto;
   try {
-    const dados = JSON.parse(fs.readFileSync(ARQUIVO, "utf8"));
-    if (dados.versao !== VERSAO) return vazio();
-    return { ...vazio(), ...dados };
+    texto = fs.readFileSync(ARQUIVO, "utf8");
+  } catch (err) {
+    if (err.code === "ENOENT") return vazio();
+    throw new Error(`Não consegui ler o estado.json (${err.code || err.message}) — tento de novo na próxima rodada.`);
+  }
+  let dados;
+  try {
+    dados = JSON.parse(texto);
   } catch {
+    fs.renameSync(ARQUIVO, `${ARQUIVO}.estragado`);
+    avisar("estado.json estava estragado (guardado como estado.json.estragado): esta rodada manda tudo de novo, sem duplicar no CRM.");
     return vazio();
   }
+  if (dados.versao !== VERSAO) return vazio();
+  return { ...vazio(), ...dados };
 }
 
-// Grava num arquivo temporário e troca: se faltar luz no meio, o estado.json
-// antigo continua inteiro.
+// Grava num arquivo temporário, força pro disco e só então troca: se faltar
+// luz no meio, o estado.json antigo continua inteiro.
 function salvarEstado(estado) {
   const tmp = `${ARQUIVO}.tmp`;
-  fs.writeFileSync(tmp, JSON.stringify(estado));
+  const fd = fs.openSync(tmp, "w");
+  try {
+    fs.writeSync(fd, JSON.stringify(estado));
+    fs.fsyncSync(fd);
+  } finally {
+    fs.closeSync(fd);
+  }
   fs.renameSync(tmp, ARQUIVO);
 }
 

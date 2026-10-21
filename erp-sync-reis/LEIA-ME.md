@@ -19,15 +19,17 @@ pagamentos, custo da época), contas a receber e contas a pagar. As telas
 
 - O computador onde fica o **MySQL do Órbita** (o "servidor" da loja), ligado
   durante o expediente.
+- **Windows 10 ou mais novo** (o Node 20 não instala no Windows 7 nem no 8).
 - **Node.js 20 ou mais novo**: baixe a versão LTS em https://nodejs.org e
-  instale com as opções padrão.
-- A senha do usuário `root` do MySQL do Órbita (só para criar o usuário de
-  leitura, uma vez).
+  instale com as opções padrão. Depois de instalar, feche e abra de novo o
+  Prompt de Comando, senão ele não acha o `node`.
+- A senha de um administrador do MySQL do Órbita: o `root` ou o `userdba` (só
+  para criar o usuário de leitura, uma vez).
 
 ## Instalação (uma vez)
 
 1. **Copie esta pasta** para `C:\erp-sync-reis` no computador do Órbita
-   (pelo AnyDesk dá pra copiar e colar). Não copie `node_modules`, `.env`,
+   (num pendrive, ou pelo AnyDesk). Não copie `node_modules`, `.env`,
    `estado.json` nem `logs` (se existirem).
 
 2. **Instale as dependências.** Abra o Prompt de Comando nessa pasta e rode:
@@ -77,7 +79,10 @@ pagamentos, custo da época), contas a receber e contas a pagar. As telas
    - **Empresas no banco**: se aparecer mais de uma, coloque o número da Reis em
      `ID_EMPRESA` no `.env`.
    - **Os valores fecham?**: diferença entre a nota, os itens e os pagamentos.
-   - **Tempo das leituras** do programa neste computador.
+   - **Tempo das leituras** do programa neste computador, com a estimativa do
+     primeiro envio.
+   - **Para conferir**, se aparecer (baixa parcial, troco): não impede de
+     ligar, mas tire um print e mande pra quem configurou o programa.
 
 5. **Coloque a chave no Railway.** No serviço do CRM: **Variables → New
    Variable**, nome `ERP_SYNC_KEY`, valor = a chave que o passo 3 mostrou. Ela
@@ -101,7 +106,8 @@ pagamentos, custo da época), contas a receber e contas a pagar. As telas
    node 2-sincronizar.js
    ```
 
-   Esse envio leva o ano inteiro e pode demorar alguns minutos. **Os dados de
+   Esse envio leva o ano inteiro de vendas. O tempo de leitura aparece no fim
+   da conferência do passo 4, e a tela vai mostrando o andamento. **Os dados de
    demonstração do CRM são apagados nesse primeiro envio.** Se a internet cair
    no meio, rode de novo: ele continua de onde parou.
 
@@ -140,8 +146,8 @@ pagamentos, custo da época), contas a receber e contas a pagar. As telas
   últimos 6 meses ficam guardados. O log não tem nome de cliente nem valor de
   título.
 - Uma vez por dia acontece uma **conferência completa**: o programa relê o ano
-  inteiro de vendas, para pegar cancelamentos antigos e DAV faturado depois. Essa
-  rodada demora um pouco mais.
+  inteiro de vendas, para pegar cancelamento de venda antiga. Essa rodada
+  demora mais, e nunca é a do botão **Atualizar agora**.
 
 ## Problemas comuns
 
@@ -151,6 +157,8 @@ pagamentos, custo da época), contas a receber e contas a pagar. As telas
 | `MySQL recusou usuário/senha` | Rode `node 0-preparar.js` de novo (passo 3): ele refaz o usuário e o `.env`. |
 | `CRM recusou a chave (401)` | A `ERP_SYNC_KEY` do `.env` tem que ser exatamente a mesma do Railway. |
 | `Sem conexão com o CRM` | Sem internet. Não precisa fazer nada: a próxima rodada manda. |
+| `Resposta estranha do CRM` | A internet pede login (Wi-Fi de visitante) ou passa por um proxy. Abra o CRM no navegador deste computador e veja se entra. |
+| `estado.json estava estragado` | Normal depois de queda de luz: essa rodada manda tudo de novo, sem duplicar. |
 | `... recusado pelo CRM — ...` | Um registro com valor fora do normal no Órbita (preço gigante, por exemplo). Os outros seguem normais. Corrija no Órbita e ele vai sozinho. |
 | `Outra sincronização ainda está rodando` | Normal enquanto o primeiro envio ou a conferência completa não terminam. |
 
@@ -158,11 +166,11 @@ pagamentos, custo da época), contas a receber e contas a pagar. As telas
 
 | Comando | O que faz |
 | --- | --- |
-| `node 0-preparar.js` | Cria (ou refaz) o usuário só de leitura e o `.env`. Pede a senha do root. |
+| `node 0-preparar.js` | Cria (ou refaz) o usuário só de leitura e o `.env`. Pede a senha do root ou do userdba. |
 | `node 1-conferir-banco.js` | Confere o banco (só leitura, só contagens). |
 | `node 2-sincronizar.js --simular` | Mostra o que mandaria, sem mandar. |
 | `node 2-sincronizar.js` | Um envio agora, na mão. |
-| `node 2-sincronizar.js --tudo` | Esquece o que já mandou e manda tudo de novo. Não duplica nada no CRM. |
+| `node 2-sincronizar.js --tudo` | Esquece o que já mandou e manda tudo de novo, inclusive o que foi cancelado. Não duplica nada no CRM; demora como o primeiro envio. |
 | `powershell -ExecutionPolicy Bypass -File .\instalar-tarefa.ps1 -Remover` | Desliga a tarefa automática (como administrador). |
 
 ## Segurança

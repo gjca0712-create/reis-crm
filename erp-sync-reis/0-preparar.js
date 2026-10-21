@@ -8,9 +8,10 @@
 //
 //   node 0-preparar.js
 //
-// Pede a senha do root do MySQL uma vez. Ela não aparece na tela, não vai pro
-// .env e não fica salva em lugar nenhum: só serve pra criar o usuário. Fora
-// isso, nada no banco do Órbita é alterado.
+// Pede um administrador do MySQL (root, ou o userdba do próprio Órbita) e a
+// senha dele, uma vez. Ela não aparece na tela, não vai pro .env e não fica
+// salva em lugar nenhum: só serve pra criar o usuário. Fora isso, nada no
+// banco do Órbita é alterado.
 // Rodar de novo é seguro: troca a senha do crm_leitura e atualiza o .env (a
 // chave do CRM continua a mesma).
 const fs = require("fs");
@@ -71,7 +72,8 @@ function comandosUsuario(versao, banco) {
       comandos.push({ sql: `GRANT SELECT ON \`${banco}\`.* TO ${u} IDENTIFIED BY ?`, senha: true });
     }
   }
-  comandos.push({ sql: "FLUSH PRIVILEGES" });
+  // Sem FLUSH PRIVILEGES: CREATE USER/GRANT já valem na hora, e o FLUSH pede
+  // uma permissão (RELOAD) que o userdba pode não ter.
   return comandos;
 }
 
@@ -86,11 +88,16 @@ function definirNoEnv(texto, valores) {
   return saida;
 }
 
-// Senha só com letras e números: não precisa de aspas no .env.
+// Com maiúscula, minúscula, número e símbolo: passa na regra de senha forte do
+// MySQL (validate_password), se estiver ligada. Os símbolos não precisam de
+// aspas no .env (nada de # nem aspas).
 function senhaAleatoria(tamanho = 24) {
-  const letras = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789";
-  const bytes = crypto.randomBytes(tamanho);
-  return Array.from(bytes, (b) => letras[b % letras.length]).join("");
+  const letras = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789-_.@!";
+  const classes = [/[A-Z]/, /[a-z]/, /[0-9]/, /[-_.@!]/];
+  for (;;) {
+    const senha = Array.from(crypto.randomBytes(tamanho), (b) => letras[b % letras.length]).join("");
+    if (classes.every((c) => c.test(senha))) return senha;
+  }
 }
 
 async function main() {
@@ -131,13 +138,43 @@ async function main() {
     const [[{ versao }]] = await conexao.query("SELECT VERSION() AS versao");
     const [bancos] = await conexao.query("SHOW DATABASES LIKE ?", [banco]);
     if (!bancos.length) throw new Error(`O banco ${banco} não existe neste MySQL. Confira MYSQL_BANCO no .env. Nada foi feito.`);
-    for (const c of comandosUsuario(versao, banco)) await conexao.query(c.sql, c.senha ? [senha] : []);
+    for (const c of comandosUsuario(versao, banco)) {
+      try {
+        await conexao.query(c.sql, c.senha ? [senha] : []);
+      } catch (err) {
+        if (/ACCESS_DENIED/.test(err.code || "")) {
+          throw new Error(
+            `O ${admin} não tem permissão pra criar usuário no MySQL (${err.code}). Rode de novo com o root, ` +
+              "ou peça ao suporte do Órbita pra rodar o criar-usuario-leitura.sql."
+          );
+        }
+        if (err.code === "ER_NOT_VALID_PASSWORD") {
+          throw new Error("O MySQL recusou a senha gerada pela regra de senha dele. Rode de novo (sai outra senha).");
+        }
+        throw err;
+      }
+    }
   } finally {
     await conexao.end().catch(() => {});
   }
 
+  // O usuário já existe com a senha nova: grava o .env antes do teste, senão
+  // um teste que falha deixa a senha perdida.
+  const valores = { MYSQL_USUARIO: USUARIO, MYSQL_SENHA: senha, MYSQL_BANCO: banco };
+  const chaveNova = !(atual.ERP_SYNC_KEY || "").trim();
+  if (chaveNova) valores.ERP_SYNC_KEY = crypto.randomBytes(32).toString("base64url");
+  fs.writeFileSync(ENV, definirNoEnv(texto, valores));
+
   // Confere entrando como o usuário novo: conecta, lê e não pode gravar.
-  const teste = await mysql.createConnection({ host, port, user: USUARIO, password: senha, database: banco });
+  let teste;
+  try {
+    teste = await mysql.createConnection({ host, port, user: USUARIO, password: senha, database: banco });
+  } catch (err) {
+    throw new Error(
+      `O ${USUARIO} foi criado e o .env gravado, mas o login com ele falhou (${err.code || err.message}). ` +
+        "Rode node 1-conferir-banco.js pra ver o erro."
+    );
+  }
   try {
     const permissoes = (await teste.query("SHOW GRANTS FOR CURRENT_USER()"))[0].map((l) => Object.values(l)[0]);
     const gravacao = permissoes.filter((g) => /ALL PRIVILEGES|INSERT|UPDATE|DELETE|DROP|ALTER|CREATE/i.test(g.replace(/GRANT USAGE/i, "")));
@@ -148,11 +185,6 @@ async function main() {
   } finally {
     await teste.end().catch(() => {});
   }
-
-  const valores = { MYSQL_USUARIO: USUARIO, MYSQL_SENHA: senha, MYSQL_BANCO: banco };
-  const chaveNova = !(atual.ERP_SYNC_KEY || "").trim();
-  if (chaveNova) valores.ERP_SYNC_KEY = crypto.randomBytes(32).toString("base64url");
-  fs.writeFileSync(ENV, definirNoEnv(texto, valores));
 
   console.log(`\nOK: usuário ${USUARIO} criado (só consulta) e .env atualizado.`);
   if (chaveNova) {

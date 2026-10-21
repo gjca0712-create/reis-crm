@@ -51,6 +51,17 @@ async function mapaDescricao(db, tabela) {
 
 // ---------------------------------------------------------------- cadastros
 
+// De qual forma de pagamento sai o troco, da mais provável pra menos: a que
+// permite troco no cadastro, a que se chama "dinheiro" e, por último, a de
+// TratamentoEspecifico "Dinheiro" — que é o padrão da coluna, então muita forma
+// que não é dinheiro também tem. 0 = nunca dá troco.
+function prioridadeTroco(tipo, descricao) {
+  if (ligado(tipo.PermiteTroco)) return 3;
+  if (/dinheiro/i.test(descricao || "")) return 2;
+  if (/dinheiro/i.test(tipo.TratamentoEspecifico || "")) return 1;
+  return 0;
+}
+
 async function lerCadastros(db) {
   const clientes = new Map();
   for (const c of await db.query(
@@ -83,10 +94,7 @@ async function lerCadastros(db) {
     "SELECT idtipoDocumento, Descricao, PermiteTroco, TratamentoEspecifico FROM tipodocumento"
   )) {
     const descricao = texto(t.Descricao, 80);
-    tipos.set(t.idtipoDocumento, {
-      descricao,
-      aceitaTroco: ligado(t.PermiteTroco) || /dinheiro/i.test(`${t.TratamentoEspecifico || ""} ${descricao || ""}`),
-    });
+    tipos.set(t.idtipoDocumento, { descricao, troco: prioridadeTroco(t, descricao) });
   }
 
   const categorias = new Map();
@@ -187,22 +195,29 @@ async function lerCabecalhosDesdeData(db, config, desdeEmissao, desdeLancamento)
   );
 }
 
+// Releitura pelo id das vendas que o programa acompanha (ver 2-sincronizar.js).
+async function lerCabecalhosPorId(db, ids) {
+  return db.queryEmPartes(`SELECT ${COLUNAS_VENDA} FROM saidanota WHERE idsaidanota IN (?)`, ids);
+}
+
 async function maiorIdVenda(db) {
   const [linha] = await db.query("SELECT MAX(idsaidanota) AS id FROM saidanota");
   return num(linha?.id);
 }
 
-function vendaValida(s) {
+function modeloQueConta(s) {
   const modelo = String(s.Modelo ?? "").trim().toUpperCase();
-  return (
-    ehZero(s.Cancelada) &&
-    ehZero(s.Excluida) &&
-    ehUm(s.Liberada) &&
-    modelo !== "" &&
-    modelo !== "ORC" &&
-    modelo !== "55" &&
-    !!s.DataEmissao
-  );
+  return modelo !== "" && modelo !== "ORC" && modelo !== "55";
+}
+
+function vendaValida(s) {
+  return ehZero(s.Cancelada) && ehZero(s.Excluida) && ehUm(s.Liberada) && modeloQueConta(s) && !!s.DataEmissao;
+}
+
+// Emitida e depois cancelada/excluída: pode estar no CRM como válida se o
+// programa perdeu o estado.json — a conferência completa manda como cancelada.
+function vendaDesfeita(s) {
+  return (ligado(s.Cancelada) || ligado(s.Excluida)) && modeloQueConta(s) && !!s.DataEmissao;
 }
 
 // Ainda sendo digitada/paga no caixa — pode virar venda daqui a pouco.
@@ -302,21 +317,21 @@ async function montarVendas(db, config, cabecalhos, { cadastros, custoManual, av
     }
 
     // Pagamentos somados por forma. Troco: se o que foi pago passa do total
-    // da nota, o excesso sai da forma que aceita troco (dinheiro).
+    // da nota, o excesso sai da forma que dá troco (prioridadeTroco).
     const formas = new Map();
     for (const p of pagamentosPorVenda.get(s.idsaidanota) || []) {
       const tipo = cadastros.tipos.get(p.idtipoDocumento);
       const forma = tipo?.descricao || texto(p.DescricaoPagamento, 80) || "Outros";
-      const atual = formas.get(forma) || { valor: 0, aceitaTroco: false };
+      const atual = formas.get(forma) || { valor: 0, troco: 0 };
       atual.valor += num(p.Valor);
-      atual.aceitaTroco ||= !!tipo?.aceitaTroco || /dinheiro/i.test(forma);
+      atual.troco = Math.max(atual.troco, tipo?.troco ?? 0, /dinheiro/i.test(forma) ? 2 : 0);
       formas.set(forma, atual);
     }
     const pago = [...formas.values()].reduce((t, f) => t + f.valor, 0);
     let sobra = Math.min(num(s.vTroco), pago - num(s.vNF));
     if (sobra > 0.004) {
-      for (const f of formas.values()) {
-        if (!f.aceitaTroco || sobra <= 0) continue;
+      for (const f of [...formas.values()].sort((a, b) => b.troco - a.troco)) {
+        if (!f.troco || sobra <= 0) continue;
         const tira = Math.min(f.valor, sobra);
         f.valor -= tira;
         sobra -= tira;
@@ -354,9 +369,9 @@ async function montarVendas(db, config, cabecalhos, { cadastros, custoManual, av
 // ---------------------------------------------------------------- títulos
 
 const COLUNAS_RECEBER = `idrecebimento AS id, CodigoCliente, DataVencimento, DataDocumento, DataLancamento,
-  ValorDocumento, ValorOriginal, ValorPagamento, DataPagamento, Baixado, Cancelado, Excluido, idtipoDocumento`;
+  ValorDocumento, ValorOriginal, ValorPagamento, DataPagamento, Baixado, Cancelado, Excluido, Parcial, idtipoDocumento`;
 const COLUNAS_PAGAR = `idpagamento AS id, CodigoFornecedor, Descricao, IdPc3, DataVencimento, DataDocumento,
-  DataLancamento, ValorDocumento, ValorPagamento, DataPagamento, Baixado, Cancelado, Excluido`;
+  DataLancamento, ValorDocumento, ValorPagamento, DataPagamento, Baixado, Cancelado, Excluido, Parcial`;
 
 const tituloEmAberto = (t) => ehZero(t.Baixado) && ehZero(t.Cancelado) && ehZero(t.Excluido);
 
@@ -378,11 +393,16 @@ function montarTituloBase(t, config, agoraIso) {
   if (!vencimento) return null;
   const baixado = ligado(t.Baixado);
   const valor = t.ValorDocumento != null ? num(t.ValorDocumento) : num(t.ValorOriginal);
+  // Em aberto com baixa parcial (Parcial = 1): o que já entrou abate do saldo.
+  // Sem essa marca, ValorPagamento de título em aberto não conta: não dá pra
+  // saber se é pagamento de verdade, e contar errado esconderia uma dívida.
+  const jaPago = num(t.ValorPagamento);
+  const parcial = !baixado && ligado(t.Parcial) && jaPago > 0 && jaPago < valor;
   return {
     erpId: t.id,
     vencimento,
     valor: arred(valor, 2),
-    valorPago: baixado ? arred(t.ValorPagamento != null ? num(t.ValorPagamento) : valor, 2) : 0,
+    valorPago: baixado ? arred(t.ValorPagamento != null ? jaPago : valor, 2) : parcial ? arred(jaPago, 2) : 0,
     pagoEm: baixado ? paraIso(t.DataPagamento, config.fuso) || agoraIso : null,
     cancelado: ligado(t.Cancelado) || ligado(t.Excluido),
   };
@@ -436,11 +456,14 @@ module.exports = {
   lerProdutos,
   lerCabecalhosDesdeId,
   lerCabecalhosDesdeData,
+  lerCabecalhosPorId,
   maiorIdVenda,
   montarVendas,
   lerContasReceber,
   lerContasPagar,
   vendaValida,
+  vendaDesfeita,
   vendaEmAndamento,
+  prioridadeTroco,
   custoNaData,
 };

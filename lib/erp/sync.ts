@@ -31,6 +31,8 @@ import { lockErpMirror } from "./lock";
 
 const erpInt = z.number().int().min(-2_147_483_648).max(2_147_483_647);
 const money = z.number().finite().min(-999_999_999_999).max(999_999_999_999);
+// Custo é Decimal(14,4): só 10 dígitos antes da vírgula, menos que `money`.
+const unitCost = z.number().finite().min(-9_999_999_999).max(9_999_999_999);
 const qty = z.number().finite().min(-9_999_999_999).max(9_999_999_999);
 const isoDate = z.string().datetime({ offset: true }).transform((s) => new Date(s));
 // Postgres não aceita o caractere NUL em texto.
@@ -44,7 +46,7 @@ const productSchema = z.object({
   marca: text(120).nullish(),
   unidade: text(10).default("UN"),
   precoVarejo: money,
-  custo: money.nullish(),
+  custo: unitCost.nullish(),
   estoque: qty,
   estoqueMinimo: qty.nullish(),
   ativo: z.boolean().default(true),
@@ -70,7 +72,7 @@ const saleSchema = z.object({
         descricao: requiredText(300),
         quantidade: qty,
         valorTotal: money,
-        custoUnitario: money.nullish(),
+        custoUnitario: unitCost.nullish(),
       })
     )
     .max(1000),

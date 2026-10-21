@@ -5,8 +5,9 @@
 //
 // Confere: usuário só de leitura, tabelas/colunas que o programa usa, quais
 // vendas contam (regra do painel do Órbita), se os valores fecham (itens x
-// nota x pagamentos), produtos/estoque/custo, títulos em aberto e quanto tempo
-// as leituras levam neste computador.
+// nota x pagamentos), produtos/estoque/custo, títulos em aberto, baixa
+// parcial, troco, vendas em andamento antigas e quanto tempo as leituras levam
+// neste computador.
 const { carregarConfig } = require("./config");
 const { conectar } = require("./banco");
 const orbita = require("./orbita");
@@ -23,7 +24,7 @@ const COLUNAS = {
     "idsaidanota DataEmissao DataLancamento vNF vProd vDesc vFrete vTroco Modelo Situacao Cancelada Excluida Liberada NomeVendedor CodigoVendedor CodigoCliente xNome idusuario IdEmpresa IdDavOriginal finNFe",
   saidaitem: "idsaidaitem IdSaida Codigo Descricao Quantidade ValorUnitario SubTotal Desconto DescontoRateado AcrescimoRateado OutrasDespesas ValorTotal",
   pagamentovenda: "idPagamentoVenda idvenda Valor DescricaoPagamento idtipoDocumento",
-  tipodocumento: "idtipoDocumento Descricao PermiteTroco TratamentoEspecifico",
+  tipodocumento: "idtipoDocumento Descricao PermiteTroco TratamentoEspecifico Excluido",
   cliente: "Codigo NomeOuRazao NomeFantasia Excluido idcontato",
   contato: "idcontato Celular Telefone",
   fornecedor: "Codigo NomeFantasia NomeOuRazao Excluido",
@@ -31,9 +32,9 @@ const COLUNAS = {
   usuario: "idusuario Nome",
   pc3: "Id Descricao",
   recebimento:
-    "idrecebimento CodigoCliente DataVencimento DataDocumento DataLancamento ValorDocumento ValorOriginal ValorPagamento DataPagamento Baixado Cancelado Excluido idtipoDocumento",
+    "idrecebimento CodigoCliente DataVencimento DataDocumento DataLancamento ValorDocumento ValorOriginal ValorPagamento DataPagamento Baixado Cancelado Excluido Parcial IdDocOriginal idtipoDocumento",
   pagamento:
-    "idpagamento CodigoFornecedor Descricao IdPc3 DataVencimento DataDocumento DataLancamento ValorDocumento ValorPagamento DataPagamento Baixado Cancelado Excluido",
+    "idpagamento CodigoFornecedor Descricao IdPc3 DataVencimento DataDocumento DataLancamento ValorDocumento ValorPagamento DataPagamento Baixado Cancelado Excluido Parcial IdDocOriginal",
 };
 
 const VALIDA = "Cancelada = 0 AND Excluida = 0 AND Liberada = 1 AND Modelo <> 'ORC' AND Modelo <> '55'";
@@ -50,7 +51,8 @@ async function cronometrar(nome, fn, tempos) {
 async function main() {
   const config = carregarConfig({ precisaCrm: false });
   const db = await conectar(config);
-  const avisos = [];
+  const avisos = []; // impedem de ligar
+  const notas = []; // não impedem, mas quem configurou precisa saber
   try {
     titulo("Conexão");
     const [info] = await db.query("SELECT VERSION() AS versao, DATABASE() AS banco, CURRENT_USER() AS usuario");
@@ -191,38 +193,141 @@ async function main() {
       };
       console.table({ "A receber": await abertos("recebimento"), "A pagar": await abertos("pagamento") });
 
+      // O programa só abate do saldo o valor pago de título em aberto marcado
+      // Parcial = 1 (orbita.js, montarTituloBase). Aqui aparece se o Órbita
+      // desta loja guarda baixa parcial de outro jeito.
+      titulo("Baixa parcial (títulos em aberto que já têm valor pago)");
+      const parciais = async (tabela) => {
+        const [r] = await db.query(
+          `SELECT SUM(Baixado = 0 AND Cancelado = 0 AND Excluido = 0 AND ValorPagamento > 0) AS abertosComPago,
+                  SUM(Baixado = 0 AND Cancelado = 0 AND Excluido = 0 AND ValorPagamento > 0 AND Parcial = 1) AS marcadosParcial,
+                  SUM(CASE WHEN Baixado = 0 AND Cancelado = 0 AND Excluido = 0 AND ValorPagamento > 0 THEN ValorPagamento ELSE 0 END) AS jaPago,
+                  SUM(Parcial = 1 AND Baixado <> 0) AS parcialBaixados,
+                  SUM(IdDocOriginal > 0) AS comDocOriginal
+           FROM ${tabela}`
+        );
+        const semMarca = (Number(r.abertosComPago) || 0) - (Number(r.marcadosParcial) || 0);
+        if (semMarca > 0) {
+          notas.push(
+            `${tabela}: ${semMarca} título(s) em aberto com valor pago sem a marca Parcial. O CRM mostra esses pelo valor cheio. Mande esta tabela pra quem configurou o programa.`
+          );
+        }
+        return {
+          "em aberto com valor pago": Number(r.abertosComPago) || 0,
+          "desses, marcados Parcial": Number(r.marcadosParcial) || 0,
+          "já pago neles": reais(r.jaPago),
+          "Parcial já baixados": Number(r.parcialBaixados) || 0,
+          "com documento de origem": Number(r.comDocOriginal) || 0,
+        };
+      };
+      console.table({ "A receber": await parciais("recebimento"), "A pagar": await parciais("pagamento") });
+
+      titulo("Formas de pagamento e troco");
+      const formas = await db.query(
+        "SELECT Descricao, PermiteTroco, TratamentoEspecifico FROM tipodocumento WHERE COALESCE(Excluido, 0) = 0 ORDER BY idtipoDocumento"
+      );
+      const trocoSai = ["não", "último caso", "sim", "sim, primeiro"];
+      console.table(
+        formas.map((f) => ({
+          forma: f.Descricao,
+          "permite troco": f.PermiteTroco,
+          tratamento: f.TratamentoEspecifico,
+          "troco sai daqui": trocoSai[orbita.prioridadeTroco(f, f.Descricao)],
+        }))
+      );
+      const [troco] = await db.query(
+        `SELECT COUNT(*) AS comTroco, SUM(d.temDinheiro) AS comDinheiro
+         FROM (
+           SELECT EXISTS (SELECT 1 FROM pagamentovenda pv JOIN tipodocumento t ON t.idtipoDocumento = pv.idtipoDocumento
+                          WHERE pv.idvenda = sa.idsaidanota AND (t.PermiteTroco = 1 OR t.Descricao LIKE '%dinheiro%')) AS temDinheiro
+           FROM saidanota sa
+           WHERE sa.DataEmissao >= ? AND sa.vTroco > 0 AND ${VALIDA.replace(/(Cancelada|Excluida|Liberada|Modelo)/g, "sa.$1")}
+         ) d`,
+        [desde30]
+      );
+      console.log(`Vendas com troco nos últimos 30 dias: ${troco.comTroco || 0}; com forma em dinheiro: ${troco.comDinheiro || 0}.`);
+      const trocoSemDinheiro = (Number(troco.comTroco) || 0) - (Number(troco.comDinheiro) || 0);
+      if (trocoSemDinheiro > 0) {
+        notas.push(
+          `${trocoSemDinheiro} venda(s) com troco sem forma em dinheiro: o troco sai de outra forma. O total da venda não muda, só a divisão por forma de pagamento.`
+        );
+      }
+
+      titulo("Vendas em andamento (ainda não liberadas), por idade");
+      const desde7 = horarioLojaMenosDias(7, config.fuso);
+      const andamento = await db.query(
+        `SELECT Modelo,
+                SUM(COALESCE(DataLancamento, DataEmissao) >= ?) AS ate7,
+                SUM(COALESCE(DataLancamento, DataEmissao) < ? AND COALESCE(DataLancamento, DataEmissao) >= ?) AS de7a90,
+                SUM(COALESCE(DataLancamento, DataEmissao) < ?) AS maisDe90
+         FROM saidanota
+         WHERE Cancelada = 0 AND Excluida = 0 AND (Liberada IS NULL OR Liberada <> 1)
+         GROUP BY Modelo ORDER BY Modelo`,
+        [desde7, desde7, desde90, desde90]
+      );
+      console.table(
+        andamento.map((a) => ({
+          modelo: a.Modelo,
+          "até 7 dias": Number(a.ate7) || 0,
+          "7 a 90 dias": Number(a.de7a90) || 0,
+          "mais de 90 dias": Number(a.maisDe90) || 0,
+        }))
+      );
+      console.log("O programa acompanha as de até 90 dias. Se uma mais antiga for faturada, entra na conferência diária.");
+
       titulo("Tempo das leituras do programa neste computador");
       const tempos = [];
       const cadastros = await cronometrar("cadastros (clientes, fornecedores...)", () => orbita.lerCadastros(db), tempos);
       const { produtos, custoManual } = await cronometrar("produtos + estoque + custo", () => orbita.lerProdutos(db, config), tempos);
       const historico = await cronometrar(
-        `vendas do histórico (${config.diasHistorico} dias, conferência diária)`,
-        () =>
-          orbita.lerCabecalhosDesdeData(db, config, horarioLojaMenosDias(config.diasHistorico, config.fuso), horarioLojaMenosDias(7, config.fuso)),
+        `cabeçalhos das vendas do histórico (${config.diasHistorico} dias)`,
+        () => orbita.lerCabecalhosDesdeData(db, config, horarioLojaMenosDias(config.diasHistorico, config.fuso), desde90),
         tempos
       );
-      const maiorId = await orbita.maiorIdVenda(db);
-      const recentes = historico.filter((s) => s.DataEmissao && s.DataEmissao >= horarioLojaMenosDias(3, config.fuso));
-      const piso = recentes.length ? Math.min(...recentes.map((s) => s.idsaidanota)) : maiorId + 1;
-      const ciclo = await cronometrar("vendas a partir do piso (ciclo normal)", () => orbita.lerCabecalhosDesdeId(db, config, piso), tempos);
-      const validasCiclo = ciclo.filter(orbita.vendaValida);
+      const validasHistorico = historico.filter((s) => orbita.vendaValida(s));
+      // Amostra: as 900 vendas mais novas, pra estimar o histórico inteiro sem
+      // pesar o computador agora.
+      const amostra = validasHistorico.slice(-900);
+      const t0 = Date.now();
       const montadas = await cronometrar(
-        `itens/pagamentos/custo de ${validasCiclo.length} vendas recentes`,
-        () => orbita.montarVendas(db, config, validasCiclo, { cadastros, custoManual, avisar: (m) => avisos.push(m) }),
+        `itens/pagamentos/custo de ${amostra.length} vendas (amostra)`,
+        () => orbita.montarVendas(db, config, amostra, { cadastros, custoManual, avisar: (m) => notas.push(m) }),
+        tempos
+      );
+      const porVenda = amostra.length ? (Date.now() - t0) / 1000 / amostra.length : 0;
+      const desde3 = horarioLojaMenosDias(3, config.fuso);
+      const acompanhadas = historico.filter(
+        (s) =>
+          (s.DataEmissao && s.DataEmissao >= desde3) ||
+          (orbita.vendaEmAndamento(s) && (s.DataLancamento || s.DataEmissao || "") >= desde90)
+      );
+      await cronometrar(
+        `releitura das ${acompanhadas.length} vendas acompanhadas (ciclo normal)`,
+        () => orbita.lerCabecalhosPorId(db, acompanhadas.map((s) => s.idsaidanota)),
         tempos
       );
       console.table(tempos);
 
-      const validasHistorico = historico.filter((s) => orbita.vendaValida(s));
+      const minutos = (segundos) => (segundos < 90 ? `${Math.round(segundos)} s` : `${Math.round(segundos / 60)} min`);
+      const leituraHistorico = porVenda * validasHistorico.length;
       console.log(
-        `Primeiro envio: ${produtos.length} produtos e ${validasHistorico.length} vendas dos últimos ${config.diasHistorico} dias.`
+        `Primeiro envio: ${produtos.length} produtos e ${validasHistorico.length} vendas dos últimos ${config.diasHistorico} dias. ` +
+          `Só a leitura das vendas leva uns ${minutos(leituraHistorico)}, mais o tempo de mandar pela internet.`
       );
-      console.log(`Ciclo normal: relê ${ciclo.length} vendas (desde o id ${piso}).`);
+      console.log(`Conferência completa (uma vez por dia): relê as mesmas vendas, uns ${minutos(leituraHistorico)}.`);
+      const validasAcompanhadas = acompanhadas.filter(orbita.vendaValida).length;
+      console.log(
+        `Ciclo normal: relê ${acompanhadas.length} vendas acompanhadas e monta ${validasAcompanhadas}, uns ${minutos(porVenda * validasAcompanhadas)}.`
+      );
       const semCusto = montadas.flatMap((v) => v.items).filter((i) => i.custoUnitario == null).length;
       const totalItens = montadas.reduce((t, v) => t + v.items.length, 0);
       if (totalItens) console.log(`Itens das vendas recentes sem custo (ficam fora da margem): ${semCusto} de ${totalItens}.`);
     }
 
+    if (notas.length) {
+      titulo("Para conferir (não impede de ligar)");
+      for (const n of notas) console.log(`- ${n}`);
+    }
     titulo(avisos.length ? "AVISOS — resolver antes de ligar" : "Tudo certo pra ligar");
     for (const a of avisos) console.log(`- ${a}`);
     console.log("\nNada foi alterado no banco: esta conferência só lê.");

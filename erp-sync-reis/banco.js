@@ -14,7 +14,17 @@ async function conectar(config) {
     charset: "utf8mb4",
     connectTimeout: 15_000,
   });
-  await conexao.query("SET SESSION TRANSACTION READ ONLY");
+  try {
+    await conexao.query("SET SESSION TRANSACTION READ ONLY");
+  } catch (err) {
+    // MySQL 5.5 não tem esse comando: fica só a camada do usuário com SELECT.
+    if (err.code !== "ER_PARSE_ERROR") throw err;
+  }
+  // Nenhuma consulta passa de 5 min: se o banco travar, a rodada desiste em vez
+  // de ficar pendurada pesando no computador. MySQL 5.7.8+ (milissegundos) e
+  // MariaDB 10.1+ (segundos); quem não tem ignora.
+  await conexao.query("SET SESSION MAX_EXECUTION_TIME = 300000").catch(() => {});
+  await conexao.query("SET SESSION max_statement_time = 300").catch(() => {});
   return {
     async query(sql, params = []) {
       const [linhas] = await conexao.query(sql, params);

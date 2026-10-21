@@ -38,11 +38,15 @@ async function postar(config, corpo, { tentativas = 3 } = {}) {
       } catch {
         // resposta que não é JSON (página de erro do proxy, por exemplo)
       }
-      if (resposta.ok) return { ok: true, json };
+      // Só conta como gravado com a resposta do próprio CRM: um 200 de página de
+      // login de Wi-Fi ou de proxy não pode marcar nada como enviado.
+      if (resposta.ok && json?.ok === true) return { ok: true, json };
       if (resposta.status === 401) throw new ErroFatal("CRM recusou a chave (401): confira ERP_SYNC_KEY aqui e no Railway.");
       if (resposta.status === 404) throw new ErroFatal(`Endereço não encontrado (404): confira CRM_URL (${config.crmUrl}).`);
       if (resposta.status === 400 || resposta.status === 413) return { ok: false, recusado: true, status: resposta.status, json };
-      ultimoErro = new Error(`CRM respondeu ${resposta.status}: ${(json && json.error) || texto.slice(0, 200)}`);
+      ultimoErro = resposta.ok
+        ? new Error(`Resposta estranha do CRM (${resposta.status}), sem confirmar a gravação: ${texto.slice(0, 200)}`)
+        : new Error(`CRM respondeu ${resposta.status}: ${(json && json.error) || texto.slice(0, 200)}`);
     } catch (err) {
       if (err instanceof ErroFatal) throw err;
       ultimoErro = err;
