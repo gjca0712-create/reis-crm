@@ -16,6 +16,7 @@ import { ConsultorChat, type MensagemConsultor } from "@/components/consultor/Co
 import { RegrasForm } from "@/components/consultor/RegrasForm";
 
 const usd = new Intl.NumberFormat("pt-BR", { style: "currency", currency: "USD" });
+const pct = (n: number) => `${n.toLocaleString("pt-BR", { maximumFractionDigits: 2 })}%`;
 
 // Consultor IA: conversa com a IA sobre os números da loja — só CEO e Gerente.
 // Cada usuário vê só as próprias conversas.
@@ -92,7 +93,7 @@ export default async function ConsultorPage({ searchParams }: { searchParams: Pr
         </div>
       </div>
 
-      <div className="grid gap-4 lg:grid-cols-[260px_minmax(0,1fr)]">
+      <div className="grid grid-cols-1 gap-4 lg:grid-cols-[260px_minmax(0,1fr)]">
         <div className="space-y-4 order-2 lg:order-1">
           <Card className="p-3">
             <LinkButton href="/admin/consultor" variant="secondary" className="w-full">
@@ -140,28 +141,22 @@ export default async function ConsultorPage({ searchParams }: { searchParams: Pr
           </Card>
 
           <Card title="Regras das ofertas" subtitle="A IA nunca sugere nada fora delas">
-            <details open={isCeo && !regras.updatedAt}>
-              <summary className="cursor-pointer select-none text-sm text-ink-secondary hover:text-ink-primary">
-                Margem mínima {regras.margemMinima}% · desconto máximo {regras.descontoMaximo}%
-              </summary>
-              <div className="mt-3">
-                <RegrasForm
-                  regras={{
-                    margemMinima: regras.margemMinima,
-                    descontoMaximo: regras.descontoMaximo,
-                    limiteDiario: regras.limiteDiario,
-                    sobreEmpresa: regras.sobreEmpresa,
-                  }}
-                  podeEditar={isCeo}
-                />
-                {regras.updatedAt && (
-                  <p className="mt-2 text-[11px] text-ink-muted">
-                    Alterado em {formatDate(regras.updatedAt)}
-                    {regras.updatedBy ? ` por ${regras.updatedBy}` : ""}
-                  </p>
-                )}
-              </div>
-            </details>
+            <RegrasForm
+              regras={{
+                margemMinima: regras.margemMinima,
+                descontoMaximo: regras.descontoMaximo,
+                limiteDiario: regras.limiteDiario,
+                sobreEmpresa: regras.sobreEmpresa,
+              }}
+              podeEditar={isCeo}
+              resumo={`Margem mínima ${pct(regras.margemMinima)} · desconto máximo ${pct(regras.descontoMaximo)}`}
+              abertoNoInicio={isCeo && !regras.updatedAt}
+              alterado={
+                regras.updatedAt
+                  ? `Alterado em ${formatDate(regras.updatedAt)}${regras.updatedBy ? ` por ${regras.updatedBy}` : ""}`
+                  : null
+              }
+            />
           </Card>
         </div>
 
