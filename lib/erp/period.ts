@@ -17,6 +17,16 @@ export function storeDayKey(date: Date): string {
   return ymdFormatter.format(date);
 }
 
+// Instante (UTC) em que começa, na loja, o dia "YYYY-MM-DD". null = data que
+// não existe (2026-02-30) ou fora do formato.
+export function storeDateStart(ymd: string): Date | null {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(ymd);
+  if (!m) return null;
+  const [y, mo, d] = [Number(m[1]), Number(m[2]), Number(m[3])];
+  const date = new Date(Date.UTC(y, mo - 1, d, STORE_UTC_OFFSET_HOURS));
+  return date.getUTCFullYear() === y && date.getUTCMonth() === mo - 1 && date.getUTCDate() === d ? date : null;
+}
+
 // Instante (UTC) em que começa, na loja, o dia de `daysAgo` dias atrás.
 // storeDayStart(0) = hoje 00:00; storeDayStart(-1) = amanhã 00:00.
 export function storeDayStart(daysAgo: number): Date {

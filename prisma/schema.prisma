@@ -491,3 +491,58 @@ model Lead {
 
   createdAt DateTime @default(now())
 }
+
+// ---------------------------------------------------------------------------
+// Consultor IA (app/admin/(app)/consultor) — chat de CEO/Gerente com o Claude
+// sobre os números da loja. A IA só lê, pelas ferramentas de
+// lib/consultor/ferramentas.ts; aqui fica o histórico, o custo de cada
+// resposta e as regras que o CEO ajusta na própria tela.
+// ---------------------------------------------------------------------------
+
+// Sem relation pro User, igual ao AuditLog: o histórico não depende do usuário
+// continuar existindo.
+model ConsultorConversation {
+  id        String   @id @default(cuid())
+  userId    String
+  title     String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  messages ConsultorMessage[]
+
+  @@index([userId, updatedAt])
+}
+
+model ConsultorMessage {
+  id               String                @id @default(cuid())
+  conversationId   String
+  conversation     ConsultorConversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  role             String // "user" | "assistant"
+  text             String
+  // Só na resposta: as consultas que a IA fez (o "Dados usados" da tela).
+  tools            Json?
+  model            String?
+  inputTokens      Int                   @default(0)
+  outputTokens     Int                   @default(0)
+  cacheReadTokens  Int                   @default(0)
+  cacheWriteTokens Int                   @default(0)
+  costUsd          Decimal               @default(0) @db.Decimal(10, 6)
+  // 1 = 👍, -1 = 👎, null = sem avaliação. As 👎 viram casos de teste.
+  feedback         Int?
+  createdAt        DateTime              @default(now())
+
+  @@index([conversationId, createdAt])
+  @@index([createdAt])
+}
+
+// Uma linha só ("consultor"). Os limites de oferta entram no texto de regras
+// da IA e também na ferramenta simular_oferta, que é quem confere de verdade.
+model ConsultorSettings {
+  id             String   @id @default("consultor")
+  margemMinima   Decimal  @default(15) @db.Decimal(5, 2) // % de margem bruta sobre o preço de venda
+  descontoMaximo Decimal  @default(10) @db.Decimal(5, 2) // % sobre o preço de tabela
+  limiteDiario   Int      @default(30) // perguntas por pessoa por dia
+  sobreEmpresa   String   @default("")
+  updatedAt      DateTime @updatedAt
+  updatedBy      String?
+}

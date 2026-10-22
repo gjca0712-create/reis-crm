@@ -17,7 +17,8 @@ export type AuditAction =
   | "erp.demo_load"
   | "erp.demo_clear"
   | "whatsapp.message_edit"
-  | "whatsapp.message_delete";
+  | "whatsapp.message_delete"
+  | "consultor.settings_update";
 
 export const AUDIT_ACTION_LABELS: Record<AuditAction, string> = {
   "login.success": "Login realizado",
@@ -32,6 +33,7 @@ export const AUDIT_ACTION_LABELS: Record<AuditAction, string> = {
   "erp.demo_clear": "Dados de demonstração do ERP apagados",
   "whatsapp.message_edit": "Mensagem de WhatsApp editada",
   "whatsapp.message_delete": "Mensagem de WhatsApp apagada para todos",
+  "consultor.settings_update": "Regras do Consultor IA alteradas",
 };
 
 type AuditActor = { userId?: string; name: string; email?: string } | null;

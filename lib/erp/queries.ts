@@ -13,24 +13,26 @@ import { isFreshSyncRequest } from "./sync-request";
 // verdade no Órbita (autorizada, não orçamento/DAV) é o programa de
 // sincronização, que só manda essas.
 
-const VALID_SALE = Prisma.sql`s.cancelada = false`;
+// Exportados (VALID_SALE, at, inRange, LOCAL_DATA) pras consultas do Consultor
+// IA (lib/consultor/consultas.ts) seguirem as mesmas regras destas telas.
+export const VALID_SALE = Prisma.sql`s.cancelada = false`;
 
 // As colunas de data são `timestamp` SEM fuso, gravadas em UTC pelo Prisma. Já
 // um Date passado no $queryRaw chega como `timestamptz` — e comparar os dois faz
 // o Postgres converter a coluna pelo fuso DA SESSÃO (no banco local é
 // America/Bahia): a janela inteira andaria 3h. Converter o parâmetro pra UTC sem
 // fuso deixa a comparação igual em qualquer banco.
-function at(date: Date) {
+export function at(date: Date) {
   return Prisma.sql`(${date}::timestamptz AT TIME ZONE 'UTC')`;
 }
 
-function inRange(start: Date, end: Date) {
+export function inRange(start: Date, end: Date) {
   return Prisma.sql`s.data >= ${at(start)} AND s.data < ${at(end)}`;
 }
 
 // Converte o timestamp gravado (UTC, sem fuso) pro horário da loja antes de
 // agrupar por dia/mês.
-const LOCAL_DATA = Prisma.sql`(s.data AT TIME ZONE 'UTC' AT TIME ZONE ${STORE_TIMEZONE})`;
+export const LOCAL_DATA = Prisma.sql`(s.data AT TIME ZONE 'UTC' AT TIME ZONE ${STORE_TIMEZONE})`;
 
 // ---------------------------------------------------------------------------
 // Estado dos dados: vazio (nunca sincronizou), demonstração, ou ERP de verdade.

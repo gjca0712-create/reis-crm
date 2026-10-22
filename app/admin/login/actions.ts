@@ -16,6 +16,7 @@ const ROUTE_FEATURES: [string, Feature][] = [
   ["/admin/dashboard", "dashboard"],
   ["/admin/financeiro", "financeiro"],
   ["/admin/produtos", "produtos"],
+  ["/admin/consultor", "consultor"],
   ["/admin/indicadores", "indicadores"],
   ["/admin/vendas", "vendas"],
   ["/admin/bairros", "bairros"],

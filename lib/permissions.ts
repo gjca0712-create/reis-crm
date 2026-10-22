@@ -18,12 +18,14 @@ export type Feature =
   | "leads"
   | "auditoria"
   | "financeiro"
-  | "produtos";
+  | "produtos"
+  | "consultor";
 
 export const FEATURE_LABELS: Record<Feature, string> = {
   dashboard: "Dashboard (faturamento)",
   financeiro: "Financeiro (ERP)",
   produtos: "Produtos (ERP)",
+  consultor: "Consultor IA",
   clientes: "Clientes",
   indicadores: "Indicadores",
   vendas: "Vendas",
@@ -57,8 +59,9 @@ export const CUSTOMIZABLE_FEATURES: Feature[] = (Object.keys(FEATURE_LABELS) as 
 
 // Números do ERP (faturamento, margem, contas a pagar/receber, custo) só pra
 // CEO e Gerente — nem personalizando dá pra liberar pra Vendedor/Atendente
-// (a grade de permissões nem mostra essas opções pra esses perfis).
-export const MANAGEMENT_FEATURES: Feature[] = ["financeiro", "produtos"];
+// (a grade de permissões nem mostra essas opções pra esses perfis). O
+// Consultor IA entra junto: ele lê esses mesmos números.
+export const MANAGEMENT_FEATURES: Feature[] = ["financeiro", "produtos", "consultor"];
 const MANAGEMENT_ROLES: Role[] = ["CEO", "GERENTE"];
 
 export function customizableFeaturesFor(role: Role): Feature[] {
@@ -75,6 +78,7 @@ const ROLE_FEATURES: Record<Role, Feature[]> = {
     "dashboard",
     "financeiro",
     "produtos",
+    "consultor",
     "clientes",
     "indicadores",
     "vendas",
@@ -90,6 +94,7 @@ const ROLE_FEATURES: Record<Role, Feature[]> = {
   GERENTE: [
     "financeiro",
     "produtos",
+    "consultor",
     "clientes",
     "indicadores",
     "vendas",
