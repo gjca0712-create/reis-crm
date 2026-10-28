@@ -476,13 +476,17 @@ export async function startWhatsAppConnection(line: WhatsAppLineId, opts?: { man
 
     sock.ev.on("messages.upsert", async ({ messages, type }) => {
       if (r.socket !== sock) return; // socket antigo — a conexão atual já reprocessa por conta própria
-      // Mensagem de cliente de verdade só entra como "notify" (evita
-      // reprocessar sincronia de histórico antigo toda vez que reconecta).
-      // Resposta mandada direto do celular pareado (fromMe), porém, às
-      // vezes chega como "append" em vez de "notify" — o WhatsApp não trata
-      // sincronia entre aparelhos do mesmo dono como "notificação" — então
-      // essa é liberada mesmo fora do notify (com dedupe por id, ver acima).
-      const batch = messages.filter((msg) => type === "notify" || msg.key?.fromMe);
+      // Mensagem de cliente chega como "notify". A que o cliente mandou com a
+      // conexão caída (deploy, reinício, queda do WhatsApp) chega na volta como
+      // "append" (node.attrs.offline no Baileys) — e o buffer de eventos ainda
+      // marca o lote inteiro com o tipo da primeira mensagem. Por isso o filtro
+      // é por mensagem: "append" de cliente entra se for recente (ver
+      // OFFLINE_MAX_AGE_MS); mais velha que isso não reabre conversa. Repetida
+      // não duplica (alreadyStored em inbound.ts).
+      // Resposta mandada direto do celular pareado (fromMe) também às vezes
+      // chega como "append" — o WhatsApp não trata sincronia entre aparelhos
+      // do mesmo dono como "notificação" — e entra sempre (dedupe por id, ver acima).
+      const batch = messages.filter((msg) => type === "notify" || msg.key?.fromMe || sentRecently(msg));
       // Marca o lote inteiro como "gravando" antes do primeiro await — ver inFlight.
       const finish = batch.map((msg) => markInFlight(line, msg.key?.id));
       for (const [i, msg] of batch.entries()) {
@@ -814,8 +818,11 @@ export async function editWhatsAppMessage(
 // função ali pegaria nosso próprio número (ou nada), nunca o do cliente. Ver
 // resolvePhoneForOutboundReply, que trata esse outro caso.
 function extractPhoneFromJid(key: { remoteJid?: string | null; senderPn?: string | null } | null | undefined): string | null {
+  // Grupo, status (status@broadcast) e canal (@newsletter) não são conversa
+  // com cliente — mesmo quando trazem o telefone de quem postou em senderPn.
+  if (/@(g\.us|broadcast|newsletter)$/.test(key?.remoteJid ?? "")) return null;
   const jid = key?.senderPn || key?.remoteJid;
-  if (!jid || jid.endsWith("@g.us") || jid.endsWith("@lid")) return null;
+  if (!jid || jid.endsWith("@lid")) return null;
   return normalizeIncomingPhone(jid.split("@")[0].split(":")[0]);
 }
 
@@ -858,6 +865,16 @@ function whatsappSentAt(msg: any): Date | null {
   return seconds > 0 ? new Date(Math.min(seconds * 1000, Date.now())) : null;
 }
 
+// Até quantos dias depois uma mensagem de cliente que chegou atrasada (com a
+// conexão caída, ver messages.upsert) ainda entra no CRM.
+const OFFLINE_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function sentRecently(msg: any): boolean {
+  const sentAt = whatsappSentAt(msg);
+  return sentAt != null && Date.now() - sentAt.getTime() <= OFFLINE_MAX_AGE_MS;
+}
+
 function textFromContent(m: proto.IMessage | null | undefined): string {
   if (!m) return "";
   return (
@@ -875,7 +892,96 @@ function textFromContent(m: proto.IMessage | null | undefined): string {
 // texto/mídia de dentro não é encontrado e a mensagem é ignorada.
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 function extractText(msg: any): string {
-  return textFromContent(normalizeMessageContent(msg.message));
+  const m = normalizeMessageContent(msg.message);
+  return textFromContent(m) || describeOtherContent(m);
+}
+
+// Tipos sem texto nem arquivo que o celular mostra normalmente (localização,
+// contato, enquete, resposta de botão/lista) viram uma linha descritiva — sem
+// isso a mensagem era descartada e só aparecia no celular.
+function describeOtherContent(m: proto.IMessage | null | undefined): string {
+  if (!m) return "";
+  const place = m.locationMessage || m.liveLocationMessage;
+  if (place?.degreesLatitude != null && place.degreesLongitude != null) {
+    const label = [m.locationMessage?.name, m.locationMessage?.address].filter(Boolean).join(" — ");
+    return (
+      `📍 Localização${m.liveLocationMessage ? " em tempo real" : ""}${label ? `: ${label}` : ""}\n` +
+      `https://maps.google.com/?q=${place.degreesLatitude},${place.degreesLongitude}`
+    );
+  }
+  const contacts = m.contactMessage ? [m.contactMessage] : (m.contactsArrayMessage?.contacts ?? []);
+  if (contacts.length) {
+    return contacts
+      .map((c) => {
+        const phone = phoneFromVcard(c.vcard);
+        return `👤 Contato: ${c.displayName || "sem nome"}${phone ? ` — ${phone}` : ""}`;
+      })
+      .join("\n");
+  }
+  const poll = m.pollCreationMessage || m.pollCreationMessageV2 || m.pollCreationMessageV3;
+  if (poll?.name) {
+    return [`📊 Enquete: ${poll.name}`, ...(poll.options ?? []).map((o) => `• ${o.optionName ?? ""}`)].join("\n");
+  }
+  return (
+    m.buttonsResponseMessage?.selectedDisplayText ||
+    m.templateButtonReplyMessage?.selectedDisplayText ||
+    m.listResponseMessage?.title ||
+    m.interactiveResponseMessage?.body?.text ||
+    ""
+  );
+}
+
+// "waid=5575999998888" é o número do WhatsApp do contato; sem ele, a linha TEL.
+function phoneFromVcard(vcard: string | null | undefined): string | null {
+  if (!vcard) return null;
+  return vcard.match(/waid=(\d+)/)?.[1] ?? vcard.match(/^TEL[^:]*:(.+)$/m)?.[1]?.trim() ?? null;
+}
+
+function mediaContent(m: proto.IMessage | null | undefined) {
+  return m?.imageMessage || m?.videoMessage || m?.documentMessage || m?.audioMessage || m?.stickerMessage || null;
+}
+
+// Arquivo que o CRM não conseguiu baixar (link expirado, rede): vira um aviso
+// no lugar dele, pra mensagem não sumir — o arquivo continua no celular.
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function undownloadedMediaNote(msg: any): string | null {
+  const m = normalizeMessageContent(msg.message);
+  const inner = mediaContent(m);
+  if (!inner) return null;
+  const kind = m?.stickerMessage
+    ? "Figurinha"
+    : { image: "Foto", video: "Vídeo", audio: "Áudio", document: "Documento" }[mediaCategoryFromMimetype(inner.mimetype || "")];
+  return `[${kind} que não deu pra baixar aqui. Veja no celular.]`;
+}
+
+// Sem nada pra mostrar, de propósito: reação, aviso de protocolo (apagar/editar
+// chegam por messages.update), troca de chave de grupo, fixar mensagem.
+const SILENT_MESSAGE_TYPES = new Set([
+  "reactionMessage",
+  "encReactionMessage",
+  "protocolMessage",
+  "senderKeyDistributionMessage",
+  "messageContextInfo",
+  "keepInChatMessage",
+  "pinInChatMessage",
+  "pollUpdateMessage",
+]);
+
+// Mensagem de cliente que não entrou no CRM: deixa rastro no log do Railway
+// (só o id e o tipo, sem conteúdo nem telefone) pra dar pra investigar.
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function logIgnoredMessage(line: WhatsAppLineId, msg: any, reason?: string): void {
+  const id = msg.key?.id ?? "?";
+  if (reason) {
+    console.warn(`[wa-recebida] (${line}) ${id}: ${reason} — ignorada`);
+    return;
+  }
+  if (msg.messageStubType === WAMessageStubType.CIPHERTEXT) {
+    console.warn(`[wa-recebida] (${line}) ${id}: ainda não deu pra abrir (criptografia) — o WhatsApp reenvia sozinho`);
+    return;
+  }
+  const types = Object.keys(normalizeMessageContent(msg.message) ?? {}).filter((t) => !SILENT_MESSAGE_TYPES.has(t));
+  if (types.length) console.warn(`[wa-recebida] (${line}) ${id}: tipo sem suporte (${types.join(", ")}) — ignorada`);
 }
 
 // Mensagem apagada pra todos (REVOKE) ou editada, já no formato que o Baileys
@@ -925,7 +1031,7 @@ type ExtractedMedia = {
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 async function extractMedia(msg: any, sock: WASocket): Promise<ExtractedMedia | null> {
   const m = normalizeMessageContent(msg.message);
-  const inner = m?.imageMessage || m?.videoMessage || m?.documentMessage || m?.audioMessage;
+  const inner = mediaContent(m);
   if (!inner) return null;
 
   const mimetype = inner.mimetype || "application/octet-stream";
@@ -964,8 +1070,10 @@ async function handleReplyFromPhone(line: WhatsAppLineId, msg: any, sock: WASock
   const phone = await resolvePhoneForOutboundReply(msg.key?.remoteJid);
   if (!phone) return;
 
-  const text = extractText(msg);
   const media = await extractMedia(msg, sock);
+  const note = media ? null : undownloadedMediaNote(msg);
+  let text = extractText(msg);
+  if (note) text = text ? `${text}\n\n${note}` : note;
   if (!text && !media) return;
 
   const wa = { waMessageId: id ?? null, waRemoteJid: msg.key?.remoteJid ?? null, waSentAt: whatsappSentAt(msg) };
@@ -992,12 +1100,24 @@ async function handleIncomingMessage(line: WhatsAppLineId, msg: any, sock: WASoc
     await handleReplyFromPhone(line, msg, sock);
     return;
   }
-  const phone = extractPhoneFromJid(msg.key);
-  if (!phone) return;
+  // Conversa @lid sem o telefone junto (sender_pn): usa o par lid<->telefone
+  // que já foi visto antes nesse cliente (ver o lid salvo mais abaixo).
+  const remoteJid: string | undefined = msg.key?.remoteJid;
+  const phone =
+    extractPhoneFromJid(msg.key) ?? (remoteJid?.endsWith("@lid") ? await findPhoneByWhatsAppLid(remoteJid) : null);
+  if (!phone) {
+    if (remoteJid?.endsWith("@lid")) logIgnoredMessage(line, msg, "conversa @lid de cliente ainda sem telefone conhecido");
+    return;
+  }
 
-  const text = extractText(msg);
   const media = await extractMedia(msg, sock);
-  if (!text && !media) return;
+  const note = media ? null : undownloadedMediaNote(msg);
+  let text = extractText(msg);
+  if (note) text = text ? `${text}\n\n${note}` : note;
+  if (!text && !media) {
+    logIgnoredMessage(line, msg);
+    return;
+  }
 
   // pushName: nome que a própria pessoa colocou no perfil do WhatsApp dela —
   // é isso que o WhatsApp Web mostra pra contato ainda não salvo na agenda.
@@ -1008,7 +1128,6 @@ async function handleIncomingMessage(line: WhatsAppLineId, msg: any, sock: WASoc
   // recipientJids). Numa conversa pelo telefone o WhatsApp às vezes manda o
   // @lid junto (sender_lid); sem nenhum, lid = null apaga o guardado: o
   // cliente passou a escrever pelo telefone (ou o número mudou de dono).
-  const remoteJid: string | undefined = msg.key?.remoteJid;
   const senderLid: string | undefined = msg.key?.senderLid;
   const lid = remoteJid?.endsWith("@lid")
     ? remoteJid
