@@ -2,7 +2,6 @@ import path from "node:path";
 import { existsSync } from "node:fs";
 import { rm } from "node:fs/promises";
 import makeWASocket, {
-  useMultiFileAuthState,
   DisconnectReason,
   downloadMediaMessage,
   fetchLatestBaileysVersion,
@@ -29,7 +28,10 @@ import {
   findPhoneByWhatsAppLid,
   applyWhatsAppRevoke,
   applyWhatsAppEdit,
+  UNOPENED_NOTE,
+  VIEW_ONCE_NOTE,
 } from "./inbound";
+import { useAtomicMultiFileAuthState } from "./auth-state";
 import { WHATSAPP_LINE_IDS, type WhatsAppLineId } from "./lines";
 import { saveMediaBuffer, mediaCategoryFromMimetype, type MediaCategory } from "./media";
 import { touchSupport } from "./live";
@@ -363,7 +365,7 @@ export async function startWhatsAppConnection(line: WhatsAppLineId, opts?: { man
   }, CONNECT_WATCHDOG_MS);
 
   try {
-    const { state, saveCreds } = await useMultiFileAuthState(authDir(line));
+    const { state, saveCreds } = await useAtomicMultiFileAuthState(authDir(line), line);
     const version = await getBaileysVersion();
     if (!isCurrent()) return; // cancelada/abandonada enquanto preparava
 
@@ -965,6 +967,12 @@ const SILENT_MESSAGE_TYPES = new Set([
   "keepInChatMessage",
   "pinInChatMessage",
   "pollUpdateMessage",
+  // Cabeçalho de álbum (várias fotos de uma vez): cada foto chega como
+  // mensagem própria logo depois.
+  "albumMessage",
+  // Edição de mensagem ou evento cifrada com o segredo da mensagem original —
+  // o Baileys não abre; a mensagem fica como foi mandada.
+  "secretEncryptedMessage",
 ]);
 
 // Mensagem de cliente que não entrou no CRM: deixa rastro no log do Railway
@@ -977,11 +985,48 @@ function logIgnoredMessage(line: WhatsAppLineId, msg: any, reason?: string): voi
     return;
   }
   if (msg.messageStubType === WAMessageStubType.CIPHERTEXT) {
-    console.warn(`[wa-recebida] (${line}) ${id}: ainda não deu pra abrir (criptografia) — o WhatsApp reenvia sozinho`);
+    console.warn(
+      msg.key?.isViewOnce
+        ? `[wa-recebida] (${line}) ${id}: visualização única (só abre no celular) — entra um aviso na conversa`
+        : `[wa-recebida] (${line}) ${id}: ainda não deu pra abrir (criptografia) — o WhatsApp reenvia sozinho; sem reenvio em 1 min, entra um aviso na conversa`
+    );
     return;
   }
   const types = Object.keys(normalizeMessageContent(msg.message) ?? {}).filter((t) => !SILENT_MESSAGE_TYPES.has(t));
   if (types.length) console.warn(`[wa-recebida] (${line}) ${id}: tipo sem suporte (${types.join(", ")}) — ignorada`);
+}
+
+// Quanto esperar o reenvio de uma mensagem que não abriu antes de pôr o aviso.
+// O Baileys pede de novo sozinho (ao aparelho do cliente e ao celular
+// pareado); quando dá certo, ela chega em segundos com o mesmo id.
+const UNOPENED_NOTE_DELAY_MS = 60_000;
+
+// Mensagem de cliente que chegou sem conteúdo (CIPHERTEXT): falha de
+// criptografia ou visualização única, que o WhatsApp só entrega no celular.
+// Antes ela sumia calada — o cliente via ✓✓ e ninguém no CRM sabia. Se o
+// reenvio não chegar a tempo, entra um aviso na conversa no lugar dela; se
+// chegar depois, toma o lugar do aviso (replaceUnopenedNote em inbound.ts).
+// Repetida (o WhatsApp reentrega o mesmo id) não duplica: alreadyStored.
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function scheduleUnopenedNote(line: WhatsAppLineId, phone: string, msg: any): void {
+  const id: string | undefined = msg.key?.id;
+  if (!id) return;
+  // Visualização única nunca chega no aparelho conectado: aviso na hora.
+  const viewOnce = Boolean(msg.key?.isViewOnce);
+  const timer = setTimeout(
+    () => {
+      processInboundWhatsAppMessage(line, phone, viewOnce ? VIEW_ONCE_NOTE : UNOPENED_NOTE, {
+        waMessageId: id,
+        waRemoteJid: msg.key?.remoteJid ?? null,
+        waSentAt: whatsappSentAt(msg),
+        pushName: msg.pushName || null,
+      }).catch((err) => {
+        console.error(`Erro ao gravar o aviso de mensagem que não abriu no WhatsApp (${line}):`, err);
+      });
+    },
+    viewOnce ? 0 : UNOPENED_NOTE_DELAY_MS
+  );
+  timer.unref?.();
 }
 
 // Mensagem apagada pra todos (REVOKE) ou editada, já no formato que o Baileys
@@ -1107,6 +1152,12 @@ async function handleIncomingMessage(line: WhatsAppLineId, msg: any, sock: WASoc
     extractPhoneFromJid(msg.key) ?? (remoteJid?.endsWith("@lid") ? await findPhoneByWhatsAppLid(remoteJid) : null);
   if (!phone) {
     if (remoteJid?.endsWith("@lid")) logIgnoredMessage(line, msg, "conversa @lid de cliente ainda sem telefone conhecido");
+    return;
+  }
+
+  if (msg.messageStubType === WAMessageStubType.CIPHERTEXT) {
+    logIgnoredMessage(line, msg);
+    scheduleUnopenedNote(line, phone, msg);
     return;
   }
 

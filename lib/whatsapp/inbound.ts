@@ -121,6 +121,14 @@ export type InboundExtras = WaIds & {
   lid?: string | null;
 };
 
+// Aviso que entra no lugar de uma mensagem do cliente que o CRM não conseguiu
+// abrir (ver scheduleUnopenedNote em client.ts) — pro atendente saber que o
+// cliente escreveu e olhar no celular. Se a mensagem de verdade chegar depois
+// (reenvio do WhatsApp atrasado), ela toma o lugar do aviso (ver replaceUnopenedNote).
+export const UNOPENED_NOTE = "[Mensagem que não deu pra abrir aqui. Veja no celular.]";
+export const VIEW_ONCE_NOTE = "[Foto ou vídeo de visualização única: só abre no celular.]";
+const UNOPENED_NOTES = [UNOPENED_NOTE, VIEW_ONCE_NOTE];
+
 // A mesma mensagem já registrada (reconexão que reentrega, eco de envio feito
 // pelo próprio CRM depois de um restart que limpou o cache em memória).
 async function alreadyStored(waMessageId: string | null | undefined, direction: "IN" | "OUT"): Promise<boolean> {
@@ -130,6 +138,26 @@ async function alreadyStored(waMessageId: string | null | undefined, direction: 
     select: { id: true },
   });
   return Boolean(found);
+}
+
+// Já tem o aviso de "não deu pra abrir" com esse id e agora chegou o conteúdo:
+// troca no mesmo lugar da conversa, sem mexer em status nem atendente.
+async function replaceUnopenedNote(
+  waMessageId: string | null | undefined,
+  text: string,
+  media: InboundMedia | undefined
+): Promise<void> {
+  if (!waMessageId || UNOPENED_NOTES.includes(text)) return;
+  await prisma.message.updateMany({
+    where: { direction: "IN", waMessageId, body: { in: UNOPENED_NOTES }, mediaUrl: null },
+    data: {
+      body: text,
+      mediaUrl: media?.url,
+      mediaType: media?.type,
+      mediaMimeType: media?.mimeType,
+      mediaFileName: media?.fileName,
+    },
+  });
 }
 
 export async function processInboundWhatsAppMessage(
@@ -149,7 +177,10 @@ async function processInboundWhatsAppMessageLocked(
   text: string,
   { media, pushName, lid, waMessageId, waRemoteJid, waSentAt }: InboundExtras
 ): Promise<void> {
-  if (await alreadyStored(waMessageId, "IN")) return;
+  if (await alreadyStored(waMessageId, "IN")) {
+    await replaceUnopenedNote(waMessageId, text, media);
+    return;
+  }
 
   const conversation = await latestConversationOnLine(phone, line);
   let customer = conversation?.customer ?? (await findCustomerByPhone(phone));
