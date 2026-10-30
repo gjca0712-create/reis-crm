@@ -10,5 +10,8 @@ export async function register() {
     await ensureAllWhatsAppStarted().catch((err) => {
       console.error("Falha ao reconectar WhatsApp no boot:", err);
     });
+    // Apaga arquivo de conversa com mais de 20 dias, pro volume não encher.
+    const { startMediaCleanup } = await import("@/lib/whatsapp/cleanup");
+    startMediaCleanup();
   }
 }

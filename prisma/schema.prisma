@@ -224,6 +224,7 @@ model Message {
 
   // Anexo (foto, documento, áudio) guardado no volume — ver lib/whatsapp/media.ts.
   // mediaUrl é só o nome do arquivo em disco; a URL servida é /api/whatsapp/media/<mediaUrl>.
+  // mediaUrl null com mediaType preenchido = arquivo apagado depois de 20 dias (lib/whatsapp/cleanup.ts).
   mediaUrl      String?
   mediaType     String? // "image" | "video" | "audio" | "document"
   mediaMimeType String?

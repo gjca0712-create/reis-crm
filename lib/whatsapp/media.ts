@@ -4,7 +4,8 @@ import crypto from "node:crypto";
 
 // Reaproveita o mesmo volume persistente do Railway que já guarda a credencial
 // do WhatsApp (.wa-auth) — o serviço só tem um volume montado, em /app/.wa-auth.
-const MEDIA_DIR = path.join(process.cwd(), ".wa-auth", "media");
+// Arquivo com mais de 20 dias é apagado (lib/whatsapp/cleanup.ts).
+export const MEDIA_DIR = path.join(process.cwd(), ".wa-auth", "media");
 
 const EXT_BY_MIME: Record<string, string> = {
   "image/jpeg": "jpg",

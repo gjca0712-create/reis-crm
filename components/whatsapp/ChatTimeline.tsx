@@ -1,6 +1,6 @@
 import type { ReactNode } from "react";
 import Link from "next/link";
-import { ArrowRightLeft, Ban, History } from "lucide-react";
+import { ArrowRightLeft, Ban, FileX, History } from "lucide-react";
 import type { ConversationTransfer, Message } from "@prisma/client";
 import { formatDateTime, formatDayLabel, formatTime } from "@/lib/format";
 import { sectorLabel } from "@/lib/whatsapp/sectors";
@@ -15,7 +15,8 @@ import { ChatImage } from "./ChatImage";
 // Fundo da conversa: pontinhos bem fracos, no lugar do papel de parede do WhatsApp.
 export const CHAT_WALLPAPER = "bg-[radial-gradient(rgba(255,255,255,0.035)_1px,transparent_1px)] [background-size:18px_18px]";
 
-// Anexo de uma mensagem apagada: a mídia sai da conversa, fica só a menção.
+// Anexo de uma mensagem apagada (ou de um arquivo antigo que a limpeza tirou do
+// volume): a mídia sai da conversa, fica só a menção.
 const MEDIA_LABELS: Record<string, string> = { image: "foto", video: "vídeo", audio: "áudio", document: "documento" };
 
 export type TimelineMessage = Message & { sender: { name: string } | null };
@@ -243,7 +244,15 @@ function TimelineItems({
                     📎 {m.mediaFileName ?? "Abrir arquivo"}
                   </a>
                 )}
-                {m.body && <span className="whitespace-pre-wrap break-words">{m.body}</span>}
+                {/* Arquivo com mais de 20 dias, apagado pra não encher o volume (lib/whatsapp/cleanup.ts). */}
+                {!m.mediaUrl && m.mediaType && (
+                  <p className="flex items-center gap-1.5 text-xs italic text-wa-muted mb-1">
+                    <FileX className="w-3.5 h-3.5 shrink-0" />
+                    Arquivo apagado do CRM por ser antigo ({MEDIA_LABELS[m.mediaType] ?? "anexo"}
+                    {m.mediaFileName ? `: ${m.mediaFileName}` : ""})
+                  </p>
+                )}
+                {m.body &&<span className="whitespace-pre-wrap break-words">{m.body}</span>}
                 <span className="invisible inline-block pl-3 text-[11px]" aria-hidden>
                   {meta}
                 </span>

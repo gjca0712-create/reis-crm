@@ -9,7 +9,7 @@ import { toWhatsAppLineId } from "./lines";
 // centenas de conversas, e consulta em excesso é o tipo de coisa que chama
 // atenção do WhatsApp. O link que o WhatsApp devolve expira, por isso baixa a
 // imagem em vez de guardar o link.
-const AVATAR_DIR = path.join(process.cwd(), ".wa-auth", "avatars");
+export const AVATAR_DIR = path.join(process.cwd(), ".wa-auth", "avatars");
 // Foto guardada vale 3 dias; "não tem foto" vale 1 dia (a pessoa pode colocar).
 const PHOTO_FRESH_MS = 3 * 24 * 60 * 60_000;
 const NO_PHOTO_FRESH_MS = 24 * 60 * 60_000;
