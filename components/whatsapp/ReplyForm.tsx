@@ -1,9 +1,19 @@
 "use client";
 
-import { useEffect, useRef, useState, type ClipboardEvent, type ChangeEvent, type KeyboardEvent } from "react";
-import { createPortal, useFormStatus } from "react-dom";
+import {
+  useEffect,
+  useRef,
+  useState,
+  useTransition,
+  type ClipboardEvent,
+  type ChangeEvent,
+  type FormEvent,
+  type KeyboardEvent,
+} from "react";
+import { createPortal } from "react-dom";
 import { Clock3, Loader2, Mic, Paperclip, SendHorizontal, Square, Trash2, X } from "lucide-react";
 import { EmojiPicker } from "./EmojiPicker";
+import { QUOTE_EVENT, type QuoteDraft } from "./Quote";
 import { LEVEL_BARS, canRecordVoice, useVoiceRecorder } from "./useVoiceRecorder";
 
 // Formulário de resposta do WhatsApp Suporte. Fica num client component à
@@ -14,17 +24,28 @@ import { LEVEL_BARS, canRecordVoice, useVoiceRecorder } from "./useVoiceRecorder
 // Igual ao WhatsApp Web: sem texto nem anexo, o botão de enviar vira o microfone.
 // allowAttachments=false: só texto (chat interno da equipe) — sem áudio também.
 // pendingSlotId: id do lugar no fim da conversa onde a mensagem aparece na hora,
-// com o reloginho, enquanto o servidor manda pro WhatsApp (PendingBubble).
+// com o reloginho, enquanto o servidor manda pro WhatsApp (PendingBubbles).
+// quoting: aceita o "Responder" de uma mensagem da conversa (Quote.tsx).
+//
+// O envio sai pelo onSubmit, e não por <form action>: com action, o React
+// limpa o formulário quando o envio termina — apagava o que já estava sendo
+// digitado pra próxima. Assim a caixa esvazia na hora, o cursor fica nela e
+// dá pra mandar uma atrás da outra.
+type PendingItem = { id: number; body: string; label: string | null; quote: QuoteDraft | null };
+let pendingSeq = 0;
+
 export function ReplyForm({
   action,
   placeholder,
   allowAttachments = true,
   pendingSlotId,
+  quoting = false,
 }: {
-  action: (formData: FormData) => void;
+  action: (formData: FormData) => unknown;
   placeholder: string;
   allowAttachments?: boolean;
   pendingSlotId?: string;
+  quoting?: boolean;
 }) {
   const formRef = useRef<HTMLFormElement>(null);
   const textRef = useRef<HTMLTextAreaElement>(null);
@@ -35,8 +56,28 @@ export function ReplyForm({
   // Só depois de montar: no servidor não dá pra saber se o navegador grava.
   const [canRecord, setCanRecord] = useState(false);
   const voice = useVoiceRecorder();
+  const [quote, setQuote] = useState<QuoteDraft | null>(null);
+  const [sending, startSending] = useTransition();
+  const [pending, setPending] = useState<PendingItem[]>([]);
 
   useEffect(() => setCanRecord(allowAttachments && canRecordVoice()), [allowAttachments]);
+
+  // Tudo enviado: os balões "enviando" saem junto com a chegada das mensagens
+  // de verdade (a tela atualizada vem no mesmo envio).
+  useEffect(() => {
+    if (!sending) setPending([]);
+  }, [sending]);
+
+  // "Responder" clicado num balão da conversa.
+  useEffect(() => {
+    if (!quoting) return;
+    const onQuote = (e: Event) => {
+      setQuote((e as CustomEvent<QuoteDraft>).detail);
+      textRef.current?.focus();
+    };
+    window.addEventListener(QUOTE_EVENT, onQuote);
+    return () => window.removeEventListener(QUOTE_EVENT, onQuote);
+  }, [quoting]);
 
   function putFile(file: File) {
     if (!fileInputRef.current) return;
@@ -67,6 +108,10 @@ export function ReplyForm({
   // Igual ao WhatsApp Web: Enter envia, Shift+Enter quebra a linha. Só com
   // teclado de verdade — no celular o Enter do teclado continua quebrando linha.
   function handleKeyDown(e: KeyboardEvent<HTMLTextAreaElement>) {
+    if (e.key === "Escape" && quote) {
+      setQuote(null);
+      return;
+    }
     if (e.key !== "Enter" || e.shiftKey || e.nativeEvent.isComposing) return;
     if (!window.matchMedia("(pointer: fine)").matches) return;
     e.preventDefault();
@@ -84,12 +129,36 @@ export function ReplyForm({
   }
 
   // A caixa esvazia assim que envia (a mensagem já aparece na conversa, com o
-  // reloginho). Depois do evento: o React monta o FormData do envio durante ele.
-  function handleSubmit() {
-    setTimeout(() => {
-      if (textRef.current) textRef.current.value = "";
-      setHasText(false);
-    }, 0);
+  // reloginho) e o cursor continua nela — no celular, só se o teclado já
+  // estava aberto (depois de mandar um áudio, não abre o teclado sozinho).
+  function handleSubmit(e: FormEvent<HTMLFormElement>) {
+    e.preventDefault();
+    const formData = new FormData(e.currentTarget);
+    const body = String(formData.get("body") || "").trim();
+    const media = formData.get("media");
+    const file = media instanceof File && media.size > 0 ? media : null;
+    if (!body && !file) return;
+
+    const isVoice = formData.get("voice") === "1" || Boolean(file?.type.startsWith("audio/"));
+    const label = file ? (isVoice ? "🎤 Mensagem de voz" : `📎 ${file.name}`) : null;
+    setPending((items) => [...items, { id: ++pendingSeq, body, label, quote }]);
+
+    const ta = textRef.current;
+    const keepFocus = document.activeElement === ta || window.matchMedia("(pointer: fine)").matches;
+    if (ta) {
+      ta.value = "";
+      if (keepFocus) ta.focus();
+    }
+    setHasText(false);
+    clearFile();
+    if (voiceFlagRef.current) voiceFlagRef.current.value = "";
+    if (voice.state !== "idle") voice.cancel();
+    setQuote(null);
+
+    // Erro (ou redirect com aviso) sobe pro Next como antes, pela transição.
+    startSending(async () => {
+      await action(formData);
+    });
   }
 
   function clearFile() {
@@ -112,8 +181,26 @@ export function ReplyForm({
   const showMic = canRecord && !hasText && !fileName;
 
   return (
-    <form ref={formRef} action={action} onSubmit={handleSubmit} className="bg-wa-panel px-3 py-2.5 flex flex-col gap-2">
-      {pendingSlotId && <PendingBubble slotId={pendingSlotId} />}
+    <form ref={formRef} onSubmit={handleSubmit} className="bg-wa-panel px-3 py-2.5 flex flex-col gap-2">
+      {pendingSlotId && <PendingBubbles slotId={pendingSlotId} items={sending ? pending : []} />}
+      {quote && (
+        <div className="flex items-start gap-2 rounded-lg border-l-4 border-wa-green bg-wa-active px-3 py-1.5">
+          <div className="min-w-0 flex-1">
+            <p className="text-xs font-medium text-wa-green">{quote.author}</p>
+            <p className="text-xs text-wa-muted line-clamp-2 whitespace-pre-wrap break-words">{quote.text}</p>
+          </div>
+          <button
+            type="button"
+            onClick={() => setQuote(null)}
+            className="shrink-0 text-wa-muted hover:text-wa-text"
+            aria-label="Cancelar resposta"
+            title="Cancelar resposta (Esc)"
+          >
+            <X className="w-4 h-4" />
+          </button>
+          <input type="hidden" name="quotedId" value={quote.id} />
+        </div>
+      )}
       {fileName && !voiceActive && (
         <div className="flex items-center justify-between gap-2 text-xs bg-wa-active rounded-lg px-3 py-1.5">
           <span className="truncate text-wa-text">📎 {fileName}</span>
@@ -187,6 +274,8 @@ export function ReplyForm({
           ) : (
             <button
               type="submit"
+              // Clicar não tira o cursor da caixa (no celular, não fecha o teclado).
+              onPointerDown={(e) => e.preventDefault()}
               className="w-10 h-10 rounded-full bg-wa-green text-wa-bg flex items-center justify-center hover:brightness-110 transition shrink-0"
               aria-label="Enviar"
               title="Enviar (Enter)"
@@ -200,33 +289,38 @@ export function ReplyForm({
   );
 }
 
-// A mensagem que acabou de ser enviada, no fim da conversa, enquanto o
-// servidor manda pro WhatsApp — some quando a tela volta com a mensagem de
-// verdade. useFormStatus traz o que está indo (o FormData do envio).
-function PendingBubble({ slotId }: { slotId: string }) {
-  const { pending, data } = useFormStatus();
+// As mensagens que acabaram de ser enviadas, no fim da conversa, enquanto o
+// servidor manda pro WhatsApp — saem quando a tela volta com as de verdade.
+function PendingBubbles({ slotId, items }: { slotId: string; items: PendingItem[] }) {
   const [slot, setSlot] = useState<HTMLElement | null>(null);
   useEffect(() => setSlot(document.getElementById(slotId)), [slotId]);
-  if (!pending || !data || !slot) return null;
-
-  const body = String(data.get("body") || "").trim();
-  const media = data.get("media");
-  const file = media instanceof File && media.size > 0 ? media : null;
-  const label = file ? (data.get("voice") === "1" || file.type.startsWith("audio/") ? "🎤 Mensagem de voz" : `📎 ${file.name}`) : null;
-  if (!body && !label) return null;
+  if (!items.length || !slot) return null;
 
   return createPortal(
-    <div className="flex flex-col items-end pt-1.5" aria-live="polite">
-      <div className="relative max-w-[75%] rounded-lg rounded-tr-none bg-wa-out px-2.5 pt-1.5 pb-2 text-[14.2px] leading-[19px] text-wa-text shadow-sm opacity-80">
-        {label && <span className="block text-xs mb-1 opacity-90">{label}</span>}
-        {body && <span className="whitespace-pre-wrap break-words">{body}</span>}
-        <span className="invisible inline-block pl-3 text-[11px]" aria-hidden>
-          enviando 00
-        </span>
-        <span className="absolute bottom-1 right-2 inline-flex items-center gap-1 text-[11px] leading-none text-white/60">
-          enviando <Clock3 className="w-3 h-3" />
-        </span>
-      </div>
+    <div className="flex flex-col items-end gap-1.5 pt-1.5" aria-live="polite">
+      {items.map((item) => (
+        <div
+          key={item.id}
+          className="relative max-w-[75%] rounded-lg rounded-tr-none bg-wa-out px-2.5 pt-1.5 pb-2 text-[14.2px] leading-[19px] text-wa-text shadow-sm opacity-80"
+        >
+          {item.quote && (
+            <span className="mb-1 block rounded-md border-l-4 border-wa-green bg-black/20 px-2 py-1">
+              <span className="block text-[12.5px] font-medium text-wa-green">{item.quote.author}</span>
+              <span className="block text-[13px] leading-[17px] text-wa-muted line-clamp-2 break-words">
+                {item.quote.text}
+              </span>
+            </span>
+          )}
+          {item.label && <span className="block text-xs mb-1 opacity-90">{item.label}</span>}
+          {item.body && <span className="whitespace-pre-wrap break-words">{item.body}</span>}
+          <span className="invisible inline-block pl-3 text-[11px]" aria-hidden>
+            enviando 00
+          </span>
+          <span className="absolute bottom-1 right-2 inline-flex items-center gap-1 text-[11px] leading-none text-white/60">
+            enviando <Clock3 className="w-3 h-3" />
+          </span>
+        </div>
+      ))}
     </div>,
     slot
   );

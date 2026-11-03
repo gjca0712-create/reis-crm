@@ -5,6 +5,8 @@ import type { ConversationTransfer, Message } from "@prisma/client";
 import { formatDateTime, formatDayLabel, formatTime } from "@/lib/format";
 import { sectorLabel } from "@/lib/whatsapp/sectors";
 import { ChatImage } from "./ChatImage";
+import { QuotedBlock, ReplyToButton } from "./Quote";
+import { quoteSnippet } from "@/lib/whatsapp/quote";
 
 // Balões da conversa (mensagens + transferências na ordem em que aconteceram),
 // com separador de dia — usado no WhatsApp Suporte. Em cima, os atendimentos
@@ -61,6 +63,14 @@ function earlierLabel(c: EarlierConversation): string {
   return `Atendimento anterior #${c.number} · ${end}${c.lineLabel ? ` · ${c.lineLabel}` : ""}`;
 }
 
+// Como cada balão mostra a mensagem respondida e se dá pra responder ele.
+type QuoteContext = {
+  // Nome do cliente, em cima da citação de uma mensagem dele.
+  customerName: string;
+  // Mostra o "Responder" (conversa em aberto, com a caixa de texto embaixo).
+  replyable: boolean;
+};
+
 export function ChatTimeline({
   messages,
   transfers,
@@ -70,6 +80,8 @@ export function ChatTimeline({
   earlier = [],
   earlierMore = 0,
   earlierHref,
+  customerName = "Cliente",
+  replyable = false,
 }: {
   messages: TimelineMessage[];
   transfers: TimelineTransfer[];
@@ -80,9 +92,12 @@ export function ChatTimeline({
   // Quantos atendimentos ainda mais antigos ficaram de fora, e o link que os traz.
   earlierMore?: number;
   earlierHref?: string;
+  customerName?: string;
+  replyable?: boolean;
 }) {
+  const quotes: QuoteContext = { customerName, replyable };
   if (!earlier.length) {
-    return <TimelineItems messages={messages} transfers={transfers} now={now} actionsFor={actionsFor} />;
+    return <TimelineItems messages={messages} transfers={transfers} now={now} actionsFor={actionsFor} quotes={quotes} />;
   }
   return (
     <div className="space-y-1.5">
@@ -103,11 +118,11 @@ export function ChatTimeline({
           {c.truncated && (
             <p className="text-center text-[11px] text-wa-muted">Só as últimas mensagens desse atendimento.</p>
           )}
-          <TimelineItems messages={c.messages} transfers={c.transfers} now={now} />
+          <TimelineItems messages={c.messages} transfers={c.transfers} now={now} quotes={quotes} />
         </section>
       ))}
       <AtendimentoDivider current>Atendimento atual{currentNumber ? ` #${currentNumber}` : ""}</AtendimentoDivider>
-      <TimelineItems messages={messages} transfers={transfers} now={now} actionsFor={actionsFor} />
+      <TimelineItems messages={messages} transfers={transfers} now={now} actionsFor={actionsFor} quotes={quotes} />
     </div>
   );
 }
@@ -117,6 +132,7 @@ function TimelineItems({
   transfers,
   now,
   actionsFor,
+  quotes,
 }: {
   messages: TimelineMessage[];
   transfers: TimelineTransfer[];
@@ -124,6 +140,7 @@ function TimelineItems({
   // Editar/apagar de uma mensagem enviada (só no Suporte). null/ausente = só o
   // nome de quem mandou embaixo do balão.
   actionsFor?: (m: TimelineMessage, senderLabel: string) => ReactNode;
+  quotes: QuoteContext;
 }) {
   const timeline = [
     ...messages.map((m) => ({ kind: "message" as const, at: m.createdAt, m })),
@@ -216,11 +233,29 @@ function TimelineItems({
             {daySeparator}
             <div className={`group flex flex-col ${out ? "items-end" : "items-start"}`}>
               <div
+                // Onde a mensagem está no WhatsApp: é por aqui que uma resposta
+                // a ela acha o balão (QuotedBlock). O áudio com legenda tem dois.
+                data-wa-ids={[m.waMessageId, m.waCaptionMessageId].filter(Boolean).join(" ") || undefined}
                 className={`relative max-w-[75%] rounded-lg px-2.5 pt-1.5 pb-2 text-[14.2px] leading-[19px] text-wa-text shadow-sm ${
                   out ? "bg-wa-out rounded-tr-none" : "bg-wa-panel rounded-tl-none"
                 }`}
                 title={m.originalBody ? `Antes da edição: ${m.originalBody}` : undefined}
               >
+                {quotes.replyable && m.waMessageId && (
+                  <ReplyToButton
+                    quote={{ id: m.id, author: out ? "Você" : quotes.customerName, text: quoteSnippet(m) }}
+                    className={`absolute top-1/2 -translate-y-1/2 ${out ? "-left-9" : "-right-9"} sm:opacity-0 sm:group-hover:opacity-100 focus:opacity-100`}
+                  />
+                )}
+                {m.quotedWaMessageId && (
+                  <QuotedBlock
+                    waMessageId={m.quotedWaMessageId}
+                    author={
+                      m.quotedFromMe === true ? "Você" : m.quotedFromMe === false ? quotes.customerName : "Mensagem respondida"
+                    }
+                    text={m.quotedBody || "Mensagem"}
+                  />
+                )}
                 {m.mediaUrl && m.mediaType === "image" && (
                   <ChatImage
                     src={`/api/whatsapp/media/${m.mediaUrl}`}

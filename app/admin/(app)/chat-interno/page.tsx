@@ -179,9 +179,9 @@ export default async function ChatInternoPage({ searchParams }: { searchParams: 
           </div>
 
           <ReplyForm
-            // Limpa a caixa só quando a própria pessoa manda (a última dela
-            // muda) — mensagem nova de colega não apaga o que está digitando.
-            key={`${opened.channel}-${messages.findLast((m) => m.sender.id === session.userId)?.id ?? ""}`}
+            // Começa limpa ao trocar de conversa. Depois de enviar, a própria
+            // caixa se esvazia (sem remontar — perderia o cursor).
+            key={opened.channel}
             action={sendTeamChatMessage.bind(null, target)}
             placeholder={isGeneral ? "Mensagem para toda a equipe" : `Mensagem para ${opened.other!.name.split(" ")[0]}`}
             allowAttachments={false}

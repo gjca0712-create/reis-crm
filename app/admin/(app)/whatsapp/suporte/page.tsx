@@ -528,6 +528,8 @@ export default async function WhatsappSuportePage({
                   transfers={active.transfers}
                   now={now}
                   currentNumber={active.number}
+                  customerName={active.customer.name}
+                  replyable={active.status === "OPEN"}
                   earlier={earlier.conversations}
                   earlierMore={earlier.more}
                   earlierHref={
@@ -572,12 +574,13 @@ export default async function WhatsappSuportePage({
                 </div>
               ) : (
                 <ReplyForm
-                  // Limpa a caixa só quando a própria pessoa manda (a última dela
-                  // muda) — mensagem nova do cliente não apaga o que está digitando.
-                  key={`${active.id}-${active.messages.findLast((m) => m.senderId === session.userId)?.id ?? ""}`}
+                  // Começa limpa ao trocar de conversa. Depois de enviar, a
+                  // própria caixa se esvazia (sem remontar — perderia o cursor).
+                  key={active.id}
                   action={sendSupportReply.bind(null, active.id)}
                   placeholder={`Mensagem pela ${whatsappLineLabel(active.line)}`}
                   pendingSlotId="wa-pending"
+                  quoting
                 />
               )}
             </>

@@ -230,6 +230,14 @@ model Message {
   mediaMimeType String?
   mediaFileName String?
 
+  // Resposta a uma mensagem específica (no WhatsApp, arrastar a mensagem pro
+  // lado): o id dela no WhatsApp e uma cópia do texto — a citada pode nem
+  // estar no CRM (antiga, de antes do CRM, arquivo já apagado). quotedFromMe:
+  // a citada é nossa (da loja). Ver lib/whatsapp/quote.ts.
+  quotedWaMessageId String?
+  quotedBody        String?
+  quotedFromMe      Boolean?
+
   // Quem enviou (só se aplica a mensagens OUT enviadas por um atendente logado).
   senderId String?
   sender   User?   @relation(fields: [senderId], references: [id])

@@ -5,6 +5,8 @@ import makeWASocket, {
   DisconnectReason,
   downloadMediaMessage,
   fetchLatestBaileysVersion,
+  getContentType,
+  jidDecode,
   jidNormalizedUser,
   makeCacheableSignalKeyStore,
   normalizeMessageContent,
@@ -34,6 +36,7 @@ import {
 import { useAtomicMultiFileAuthState } from "./auth-state";
 import { WHATSAPP_LINE_IDS, type WhatsAppLineId } from "./lines";
 import { saveMediaBuffer, mediaCategoryFromMimetype, type MediaCategory } from "./media";
+import { quoteSnippet, type QuoteInfo } from "./quote";
 import { touchSupport } from "./live";
 
 // Conexão "estilo WhatsApp Web" via Baileys (protocolo não-oficial). Isso NÃO é a
@@ -656,15 +659,28 @@ export async function checkWhatsAppNumber(line: WhatsAppLineId, phone: string): 
   return found ? "ok" : found === null ? "not-on-whatsapp" : "unknown";
 }
 
+// Responder uma mensagem específica: a citada aparece em cima da resposta no
+// celular do cliente. text: como ela aparece ali — vai só o texto (ou o tipo
+// do arquivo), sem a miniatura.
+export type OutboundQuote = { id: string; fromMe: boolean; text: string };
+
+// A citada no formato que o Baileys espera, na mesma conversa do envio (o @lid
+// ou o telefone, o que estiver sendo tentado) — remoteJid diferente faria a
+// citação parecer de outra conversa.
+function quotedFor(jid: string, quote: OutboundQuote): WAMessage {
+  return { key: { remoteJid: jid, fromMe: quote.fromMe, id: quote.id }, message: { conversation: quote.text } };
+}
+
 async function sendToFirstWorking(
   line: WhatsAppLineId,
   sock: WASocket,
   jids: string[],
-  content: AnyMessageContent
+  content: AnyMessageContent,
+  quote?: OutboundQuote
 ): Promise<{ jid: string; sent: WAMessage | undefined } | null> {
   for (const [i, jid] of jids.entries()) {
     try {
-      return { jid, sent: await sock.sendMessage(jid, content) };
+      return { jid, sent: await sock.sendMessage(jid, content, quote ? { quoted: quotedFor(jid, quote) } : undefined) };
     } catch (err) {
       const next = i < jids.length - 1 ? " — tentando pelo telefone" : "";
       console.error(`Erro ao enviar via WhatsApp (${line}) para ${jid}${next}:`, err);
@@ -677,7 +693,8 @@ export async function sendWhatsAppText(
   line: WhatsAppLineId,
   phone: string,
   text: string,
-  lid?: string | null
+  lid?: string | null,
+  quote?: OutboundQuote
 ): Promise<WaSendResult> {
   const r = runtimeFor(line);
   if (!r.socket || r.status !== "connected") return NOT_SENT;
@@ -688,7 +705,7 @@ export async function sendWhatsAppText(
     return NOT_SENT;
   }
 
-  const result = await sendToFirstWorking(line, r.socket, jids, { text });
+  const result = await sendToFirstWorking(line, r.socket, jids, { text }, quote);
   if (!result) return NOT_SENT;
   rememberSentMessage(line, result.sent);
   return { sent: true, ref: refOf(result.sent, result.jid) };
@@ -718,7 +735,8 @@ export async function sendWhatsAppMedia(
   line: WhatsAppLineId,
   phone: string,
   media: OutboundMedia,
-  lid?: string | null
+  lid?: string | null,
+  quote?: OutboundQuote
 ): Promise<WaSendResult> {
   const r = runtimeFor(line);
   if (!r.socket || r.status !== "connected") return NOT_SENT;
@@ -744,7 +762,7 @@ export async function sendWhatsAppMedia(
           : { document: media.buffer, mimetype: media.mimetype, fileName: media.fileName ?? "arquivo", caption: media.caption };
 
   try {
-    const result = await sendToFirstWorking(line, sock, jids, content);
+    const result = await sendToFirstWorking(line, sock, jids, content, quote);
     if (!result) return NOT_SENT;
     rememberSentMessage(line, result.sent); // já saiu, mesmo que a legenda falhe logo abaixo
 
@@ -956,6 +974,50 @@ function undownloadedMediaNote(msg: any): string | null {
   return `[${kind} que não deu pra baixar aqui. Veja no celular.]`;
 }
 
+// Mensagem citada: o cliente (ou o celular pareado) respondeu uma mensagem
+// específica — o WhatsApp manda junto o id dela e uma cópia (contextInfo).
+// A cópia vale mesmo quando a citada não está no CRM (antiga, de antes do CRM).
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function extractQuote(msg: any, sock: WASocket): QuoteInfo | null {
+  const m = normalizeMessageContent(msg.message);
+  const type = m ? getContentType(m) : undefined;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const ctx: proto.IContextInfo | null | undefined = type ? (m as any)[type]?.contextInfo : undefined;
+  if (!ctx?.stanzaId) return null;
+  const snippet = quotedSnippetFromContent(normalizeMessageContent(ctx.quotedMessage));
+  return {
+    waMessageId: ctx.stanzaId,
+    // Resposta a um status da loja (o "story" do WhatsApp).
+    body: ctx.remoteJid === "status@broadcast" ? `Status · ${snippet}` : snippet,
+    fromMe: ctx.participant ? isOwnJid(sock, ctx.participant) : null,
+  };
+}
+
+function quotedSnippetFromContent(m: proto.IMessage | null | undefined): string {
+  const mediaType = m?.imageMessage
+    ? "image"
+    : m?.videoMessage
+      ? "video"
+      : m?.audioMessage
+        ? "audio"
+        : m?.documentMessage
+          ? "document"
+          : m?.stickerMessage
+            ? "sticker"
+            : null;
+  return quoteSnippet({
+    body: textFromContent(m) || describeOtherContent(m),
+    mediaType,
+    mediaFileName: m?.documentMessage?.fileName,
+  });
+}
+
+// A própria linha (pelo telefone ou pelo @lid), de qualquer aparelho dela.
+function isOwnJid(sock: WASocket, jid: string): boolean {
+  const user = jidDecode(jid)?.user;
+  return Boolean(user) && [sock.user?.id, sock.user?.lid].some((own) => own && jidDecode(own)?.user === user);
+}
+
 // Sem nada pra mostrar, de propósito: reação, aviso de protocolo (apagar/editar
 // chegam por messages.update), troca de chave de grupo, fixar mensagem.
 const SILENT_MESSAGE_TYPES = new Set([
@@ -1121,7 +1183,12 @@ async function handleReplyFromPhone(line: WhatsAppLineId, msg: any, sock: WASock
   if (note) text = text ? `${text}\n\n${note}` : note;
   if (!text && !media) return;
 
-  const wa = { waMessageId: id ?? null, waRemoteJid: msg.key?.remoteJid ?? null, waSentAt: whatsappSentAt(msg) };
+  const wa = {
+    waMessageId: id ?? null,
+    waRemoteJid: msg.key?.remoteJid ?? null,
+    waSentAt: whatsappSentAt(msg),
+    quote: extractQuote(msg, sock),
+  };
   if (!media) {
     await processOutboundFromPhone(line, phone, text, wa);
     return;
@@ -1191,6 +1258,7 @@ async function handleIncomingMessage(line: WhatsAppLineId, msg: any, sock: WASoc
     waMessageId: msg.key?.id ?? null,
     waRemoteJid: remoteJid ?? null,
     waSentAt: whatsappSentAt(msg),
+    quote: extractQuote(msg, sock),
   };
 
   if (!media) {

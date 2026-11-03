@@ -1,7 +1,7 @@
 "use server";
 
 import { redirect } from "next/navigation";
-import { cookies } from "next/headers";
+import { cookies, headers } from "next/headers";
 import { prisma } from "@/lib/prisma";
 import { requireFeature } from "@/lib/session";
 import {
@@ -23,6 +23,7 @@ import {
   type StartConversationResult,
 } from "@/lib/whatsapp/start-conversation";
 import { saveMediaBuffer, mediaCategoryFromMimetype } from "@/lib/whatsapp/media";
+import { quoteSnippet } from "@/lib/whatsapp/quote";
 import { VOICE_NOTE_MIMETYPE, oggOpusInfo } from "@/lib/whatsapp/voice-note";
 import {
   canManageQueue,
@@ -209,7 +210,8 @@ export async function disconnectWhatsAppAction(line: string) {
 
 // Envia de verdade se a conexão WhatsApp Web estiver ativa; sempre registra a
 // mensagem internamente, com o atendente logado como remetente. Aceita um
-// anexo opcional (campo "media" do formulário) — foto, documento ou áudio.
+// anexo opcional (campo "media" do formulário) — foto, documento ou áudio —
+// e a mensagem que está sendo respondida (campo "quotedId", o id dela no CRM).
 export async function sendSupportReply(conversationId: string, formData: FormData) {
   const body = String(formData.get("body") || "").trim();
   const mediaFile = formData.get("media");
@@ -227,6 +229,24 @@ export async function sendSupportReply(conversationId: string, formData: FormDat
   const line = toWhatsAppLineId(conversation.line);
   const phone = conversation.customer.phone;
   const senderName = await agentName(session.userId);
+
+  // Só mensagem do mesmo cliente (desta conversa ou de um atendimento
+  // anterior dele) que chegou a passar pelo WhatsApp.
+  const quotedId = String(formData.get("quotedId") || "");
+  const quoted = quotedId
+    ? await prisma.message.findFirst({
+        where: {
+          id: quotedId,
+          deletedAt: null,
+          waMessageId: { not: null },
+          conversation: { customerId: conversation.customerId },
+        },
+        select: { waMessageId: true, direction: true, body: true, mediaType: true, mediaFileName: true },
+      })
+    : null;
+  const quote = quoted?.waMessageId
+    ? { id: quoted.waMessageId, fromMe: quoted.direction === "OUT", text: quoteSnippet(quoted) }
+    : undefined;
 
   let result: WaSendResult;
   let mediaUrl: string | undefined;
@@ -254,9 +274,9 @@ export async function sendSupportReply(conversationId: string, formData: FormDat
       fileName: mediaFileName,
       caption: (body || mediaType !== "audio" ? signAgentMessage(senderName, body) : body) || undefined,
       voiceNoteSeconds: voiceNote?.seconds,
-    });
+    }, quote);
   } else {
-    result = await sendWhatsAppMessage(line, conversation.customer, signAgentMessage(senderName, body));
+    result = await sendWhatsAppMessage(line, conversation.customer, signAgentMessage(senderName, body), quote);
   }
   const sent = result.sent;
 
@@ -274,6 +294,7 @@ export async function sendSupportReply(conversationId: string, formData: FormDat
         waMessageId: result.ref?.id,
         waRemoteJid: result.ref?.remoteJid,
         waCaptionMessageId: result.ref?.captionId,
+        ...(quote && { quotedWaMessageId: quote.id, quotedBody: quote.text, quotedFromMe: quote.fromMe }),
       },
     }),
     prisma.conversation.update({ where: { id: conversationId }, data: { lastMessageAt: new Date() } }),
@@ -288,12 +309,26 @@ export async function sendSupportReply(conversationId: string, formData: FormDat
 
   refreshSupport();
 
-  // Sempre redireciona pra normalizar a URL (tira um aviso antigo numa reenvio
-  // que deu certo). Quando não sai, distingue o motivo — linha desconectada ou
-  // número salvo inválido — senão o atendente manda reconectar uma linha que
-  // já está conectada, achando que é isso que está impedindo o envio.
+  // Saiu: não redireciona. Redirect remonta a tela inteira — a caixa de texto
+  // perdia o foco (tinha que clicar nela de novo pra mandar a próxima) e o que
+  // já estava sendo digitado. Só quando a tela mostra o aviso de uma tentativa
+  // anterior, pra tirar ele. Quando não sai, distingue o motivo — linha
+  // desconectada ou número salvo inválido — senão o atendente manda reconectar
+  // uma linha que já está conectada, achando que é isso que está impedindo o envio.
   const aviso = sent ? null : isSendablePhone(phone) ? "nao-entregue" : "numero-invalido";
+  if (!aviso && !(await showingAviso())) return;
   redirect(`/admin/whatsapp/suporte?c=${conversationId}${aviso ? `&aviso=${aviso}` : ""}`);
+}
+
+// A tela de onde veio a ação está com um aviso no topo (?aviso=...).
+async function showingAviso(): Promise<boolean> {
+  const referer = (await headers()).get("referer");
+  if (!referer) return false;
+  try {
+    return new URL(referer).searchParams.has("aviso");
+  } catch {
+    return false;
+  }
 }
 
 // --- Iniciar conversa pelo CRM (lib/whatsapp/start-conversation.ts) -----------

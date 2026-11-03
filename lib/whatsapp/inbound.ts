@@ -5,6 +5,7 @@ import type { WhatsAppLineId } from "./lines";
 import type { MediaCategory } from "./media";
 import { closingKind } from "./closing";
 import { touchSupport } from "./live";
+import type { QuoteInfo } from "./quote";
 
 // Até quanto tempo depois da última mensagem um "obrigado" ainda conta como
 // despedida da conversa resolvida (e não como assunto novo).
@@ -111,8 +112,29 @@ export async function findPhoneByWhatsAppLid(lid: string): Promise<string | null
 
 // Id da mensagem no WhatsApp (key.id) e a conversa onde ela está — ver
 // Message.waMessageId. waSentAt: quando ela saiu no WhatsApp (ver Message.waSentAt).
+// quote: a mensagem que ela responde (ver Message.quotedWaMessageId).
 // Opcionais: o webhook do Bradial não manda.
-type WaIds = { waMessageId?: string | null; waRemoteJid?: string | null; waSentAt?: Date | null };
+type WaIds = {
+  waMessageId?: string | null;
+  waRemoteJid?: string | null;
+  waSentAt?: Date | null;
+  quote?: QuoteInfo | null;
+};
+
+// Campos da citação no Message. Sem saber de quem é a citada (o WhatsApp não
+// mandou o autor), procura ela no CRM.
+async function quoteFields(quote: QuoteInfo | null | undefined) {
+  if (!quote) return {};
+  let fromMe = quote.fromMe;
+  if (fromMe === null) {
+    const quoted = await prisma.message.findFirst({
+      where: { OR: [{ waMessageId: quote.waMessageId }, { waCaptionMessageId: quote.waMessageId }] },
+      select: { direction: true },
+    });
+    fromMe = quoted ? quoted.direction === "OUT" : null;
+  }
+  return { quotedWaMessageId: quote.waMessageId, quotedBody: quote.body, quotedFromMe: fromMe };
+}
 
 export type InboundExtras = WaIds & {
   media?: InboundMedia;
@@ -145,7 +167,8 @@ async function alreadyStored(waMessageId: string | null | undefined, direction: 
 async function replaceUnopenedNote(
   waMessageId: string | null | undefined,
   text: string,
-  media: InboundMedia | undefined
+  media: InboundMedia | undefined,
+  quote: QuoteInfo | null | undefined
 ): Promise<void> {
   if (!waMessageId || UNOPENED_NOTES.includes(text)) return;
   await prisma.message.updateMany({
@@ -156,6 +179,7 @@ async function replaceUnopenedNote(
       mediaType: media?.type,
       mediaMimeType: media?.mimeType,
       mediaFileName: media?.fileName,
+      ...(await quoteFields(quote)),
     },
   });
 }
@@ -175,10 +199,10 @@ async function processInboundWhatsAppMessageLocked(
   line: WhatsAppLineId,
   phone: string,
   text: string,
-  { media, pushName, lid, waMessageId, waRemoteJid, waSentAt }: InboundExtras
+  { media, pushName, lid, waMessageId, waRemoteJid, waSentAt, quote }: InboundExtras
 ): Promise<void> {
   if (await alreadyStored(waMessageId, "IN")) {
-    await replaceUnopenedNote(waMessageId, text, media);
+    await replaceUnopenedNote(waMessageId, text, media, quote);
     return;
   }
 
@@ -274,6 +298,7 @@ async function processInboundWhatsAppMessageLocked(
         waMessageId,
         waRemoteJid,
         waSentAt,
+        ...(await quoteFields(quote)),
       },
     }),
     prisma.conversation.update({
@@ -305,7 +330,7 @@ async function processOutboundFromPhoneLocked(
   line: WhatsAppLineId,
   phone: string,
   text: string,
-  { media, waMessageId, waRemoteJid, waSentAt }: WaIds & { media?: InboundMedia }
+  { media, waMessageId, waRemoteJid, waSentAt, quote }: WaIds & { media?: InboundMedia }
 ): Promise<void> {
   if (await alreadyStored(waMessageId, "OUT")) return;
 
@@ -325,6 +350,7 @@ async function processOutboundFromPhoneLocked(
         waMessageId,
         waRemoteJid,
         waSentAt,
+        ...(await quoteFields(quote)),
       },
     }),
     prisma.conversation.update({ where: { id: conversation.id }, data: { lastMessageAt: new Date() } }),

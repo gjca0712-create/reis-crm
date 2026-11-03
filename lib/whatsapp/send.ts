@@ -2,6 +2,7 @@ import {
   sendWhatsAppText as sendTextViaBaileys,
   sendWhatsAppMedia as sendMediaViaBaileys,
   type OutboundMedia,
+  type OutboundQuote,
   type WaSendResult,
 } from "./client";
 import { sendViaBradial, isBradialConfigured } from "./bradial";
@@ -17,15 +18,18 @@ export type WhatsAppRecipient = { phone: string; whatsappLid?: string | null };
 // por ele; senão cai na conexão não-oficial (Baileys/QR) daquela linha.
 // `ref` (onde a mensagem ficou no WhatsApp) só existe pelo Baileys — pelo
 // Bradial a mensagem sai, mas não dá pra apagar/editar depois pelo CRM.
+// quote: responder uma mensagem específica (também só pelo Baileys — pelo
+// Bradial sai como mensagem comum).
 export async function sendWhatsAppMessage(
   line: WhatsAppLineId,
   to: WhatsAppRecipient,
-  text: string
+  text: string,
+  quote?: OutboundQuote
 ): Promise<WaSendResult> {
   if (isBradialConfigured()) {
     return { sent: await sendViaBradial(to.phone, text), ref: null };
   }
-  return sendTextViaBaileys(line, to.phone, text, to.whatsappLid);
+  return sendTextViaBaileys(line, to.phone, text, to.whatsappLid, quote);
 }
 
 // Envio de mídia (foto, documento, áudio). Só implementado via Baileys por
@@ -34,11 +38,12 @@ export async function sendWhatsAppMessage(
 export async function sendWhatsAppMedia(
   line: WhatsAppLineId,
   to: WhatsAppRecipient,
-  media: OutboundMedia
+  media: OutboundMedia,
+  quote?: OutboundQuote
 ): Promise<WaSendResult> {
   if (isBradialConfigured()) {
     console.error("Envio de mídia via Bradial ainda não está implementado.");
     return { sent: false, ref: null };
   }
-  return sendMediaViaBaileys(line, to.phone, media, to.whatsappLid);
+  return sendMediaViaBaileys(line, to.phone, media, to.whatsappLid, quote);
 }
