@@ -5,6 +5,7 @@ import { whatsappLineLabel } from "@/lib/whatsapp/lines";
 import { sectorLabel } from "@/lib/whatsapp/sectors";
 import { needsReply } from "@/lib/whatsapp/closing";
 import { formatShortAgo } from "@/lib/whatsapp/filters";
+import { outcomeInfo } from "@/lib/whatsapp/outcome";
 import { ContactAvatar } from "./ContactAvatar";
 
 export type FinishedConversation = {
@@ -17,6 +18,8 @@ export type FinishedConversation = {
   customer: { id: string; name: string; phone: string };
   assignedTo: { name: string } | null;
   resolvedBy: { name: string } | null;
+  // Venda / Orçamento / Informação (lib/whatsapp/outcome.ts); null = não marcado.
+  outcome: string | null;
   // Só a última que ainda vale (apagada não conta) — dá a prévia.
   messages: { direction: string; body: string; mediaType: string | null; sender: { name: string } | null }[];
 };
@@ -63,6 +66,7 @@ export function FinishedList({
           // "obrigado"): ficou sem resposta — faixa vermelha, igual à fila.
           const unanswered = needsReply(last);
           const agent = c.resolvedBy?.name ?? c.assignedTo?.name;
+          const outcome = outcomeInfo(c.outcome);
           const media = last?.mediaType ? MEDIA_PREVIEW[last.mediaType] : undefined;
           const MediaIcon = media?.icon;
           const previewText = last?.body || media?.label;
@@ -104,6 +108,12 @@ export function FinishedList({
                 <div className="flex items-baseline justify-between gap-2 mt-0.5">
                   <span className="text-[15px] text-wa-text truncate">
                     {c.customer.name} <span className="text-[13px] font-semibold">#{c.number}</span>
+                    {outcome && (
+                      <span className="ml-1.5 inline-flex items-center gap-1 align-middle text-[11px] text-wa-muted">
+                        <span className="w-2 h-2 rounded-full" style={{ backgroundColor: outcome.color }} aria-hidden />
+                        {outcome.label}
+                      </span>
+                    )}
                   </span>
                   <span
                     className="text-[11px] text-wa-muted shrink-0 tabular-nums"

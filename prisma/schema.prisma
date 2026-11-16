@@ -28,6 +28,7 @@ model User {
   sentMessages          Message[]
   resolvedConversations Conversation[] @relation("ResolvedConversations")
   assignedConversations Conversation[] @relation("AssignedConversations")
+  conversationOutcomes  Conversation[] @relation("ConversationOutcomes")
   ratings               Rating[]
   occurrencesReported   Occurrence[]
   conversationTransfers ConversationTransfer[] @relation("TransfersMade")
@@ -186,6 +187,16 @@ model Conversation {
   // Setor que está com a conversa (lib/whatsapp/sectors.ts) — muda quando
   // alguém transfere. null = entrada geral (toda conversa nova começa assim).
   sector String?
+
+  // Resultado do atendimento, marcado pelo atendente na conversa: "VENDA"
+  // (comprou), "ORCAMENTO" (pediu orçamento) ou "INFORMACAO" (só tirou uma
+  // dúvida) — lib/whatsapp/outcome.ts. null = ninguém marcou. outcomeAgentId é
+  // quem fica com o crédito no relatório (o atendente da conversa na hora em
+  // que marcou, não necessariamente quem clicou — ver setConversationOutcome).
+  outcome        String?
+  outcomeAgentId String?
+  outcomeAgent   User?     @relation("ConversationOutcomes", fields: [outcomeAgentId], references: [id], onDelete: SetNull)
+  outcomeAt      DateTime?
 
   messages  Message[]
   rating    Rating?

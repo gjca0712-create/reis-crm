@@ -23,6 +23,11 @@ export function parseMetricsPeriod(value: string | undefined): MetricsPeriod {
 // en-CA dá AAAA-MM-DD: o dia de hoje no fuso da loja.
 const storeDay = new Intl.DateTimeFormat("en-CA", { timeZone: "America/Bahia" });
 
+// O dia (AAAA-MM-DD, fuso da loja) em que a data cai — agrupar por dia.
+export function storeDayKey(date: Date): string {
+  return storeDay.format(date);
+}
+
 // Meia-noite (fuso da loja) do primeiro dia do período. America/Bahia não tem
 // horário de verão: meia-noite lá é sempre 03:00 UTC.
 export function periodStart(period: MetricsPeriod, now: Date): Date {

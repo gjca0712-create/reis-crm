@@ -48,6 +48,7 @@ import { SupportFilters } from "@/components/whatsapp/SupportFilters";
 import { NewConversationDialog } from "@/components/whatsapp/NewConversationDialog";
 import { TransferDialog } from "@/components/whatsapp/TransferDialog";
 import { ContactInfo } from "@/components/whatsapp/ContactInfo";
+import { OutcomePicker } from "@/components/whatsapp/OutcomePicker";
 import { canAccess } from "@/lib/permissions";
 import { getSessionFeatures, requireFeature } from "@/lib/session";
 import {
@@ -56,6 +57,7 @@ import {
   cancelWhatsAppConnectionAction,
   sendSupportReply,
   resolveConversation,
+  setConversationOutcome,
   claimConversation,
   releaseConversation,
   editSupportMessage,
@@ -517,6 +519,14 @@ export default async function WhatsappSuportePage({
                   </a>
                 </div>
               </div>
+              <OutcomePicker
+                // Chave diferente da do ReplyForm (irmãos no mesmo bloco: chave
+                // repetida faz o React duplicar o componente ao trocar de conversa).
+                key={`resultado-${active.id}`}
+                value={active.outcome}
+                action={setConversationOutcome.bind(null, active.id)}
+                open={active.status === "OPEN"}
+              />
 
               {/* flex-col-reverse: a rolagem já começa no fim (mensagem mais
                   nova), e a atualização automática não pula pro topo. */}

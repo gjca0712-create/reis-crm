@@ -3,7 +3,8 @@
 import { redirect } from "next/navigation";
 import { cookies, headers } from "next/headers";
 import { prisma } from "@/lib/prisma";
-import { requireFeature } from "@/lib/session";
+import { getSessionFeatures, requireFeature } from "@/lib/session";
+import { canAccess } from "@/lib/permissions";
 import {
   startWhatsAppConnection,
   disconnectWhatsApp,
@@ -24,6 +25,7 @@ import {
 } from "@/lib/whatsapp/start-conversation";
 import { saveMediaBuffer, mediaCategoryFromMimetype } from "@/lib/whatsapp/media";
 import { quoteSnippet } from "@/lib/whatsapp/quote";
+import { isConversationOutcome } from "@/lib/whatsapp/outcome";
 import { VOICE_NOTE_MIMETYPE, oggOpusInfo } from "@/lib/whatsapp/voice-note";
 import {
   canManageQueue,
@@ -458,6 +460,47 @@ export async function resolveConversation(conversationId: string) {
   redirect(`/admin/whatsapp/suporte${query ? `?${query}` : ""}`);
 }
 
+
+// --- Resultado do atendimento (Venda / Orçamento / Informação) -----------------
+// Os botões ficam embaixo do cabeçalho da conversa (OutcomePicker). Clicar no
+// que já está marcado desmarca (outcome null). Sem redirect: a tela só
+// atualiza (refreshSupport) e a resposta que estiver sendo digitada fica lá.
+// O crédito no relatório vai pro atendente da conversa — quem está com ela, ou
+// quem finalizou —, não pra quem clicou: o gerente corrigindo a marcação de um
+// atendimento antigo não "rouba" a venda. Conversa de ninguém: quem marcou.
+export async function setConversationOutcome(
+  conversationId: string,
+  outcome: string | null
+): Promise<{ error?: string }> {
+  const session = await requireFeature("whatsapp_suporte");
+  if (outcome !== null && !isConversationOutcome(outcome)) return { error: "Opção inválida." };
+  const viewer = await loadQueueViewer(session);
+
+  const conversation = await prisma.conversation.findUnique({
+    where: { id: conversationId },
+    select: { status: true, assignedToId: true, sector: true, resolvedById: true },
+  });
+  if (!conversation) return { error: "Essa conversa não existe mais." };
+  if (queueBlockReason(viewer, conversation)) return { error: "Essa conversa está com outro atendente agora." };
+  // Finalizada é histórico, que só CEO/Gerente abrem (a tela já não mostra).
+  if (conversation.status !== "OPEN" && !canAccess(await getSessionFeatures(session), "whatsapp_gestao")) {
+    return { error: "Esse atendimento já foi finalizado." };
+  }
+
+  await prisma.conversation.update({
+    where: { id: conversationId },
+    data: outcome
+      ? {
+          outcome,
+          outcomeAgentId: conversation.assignedToId ?? conversation.resolvedById ?? session.userId,
+          outcomeAt: new Date(),
+        }
+      : { outcome: null, outcomeAgentId: null, outcomeAt: null },
+  });
+
+  refreshSupport();
+  return {};
+}
 
 // --- Editar / apagar pra todos uma mensagem já enviada -------------------------
 // Regras em lib/whatsapp/message-permissions.ts (a tela só mostra os botões

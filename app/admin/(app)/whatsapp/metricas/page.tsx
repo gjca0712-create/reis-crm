@@ -11,6 +11,8 @@ import {
 } from "@/lib/whatsapp/metrics";
 import { Card } from "@/components/ui/Card";
 import { StatTile } from "@/components/ui/StatTile";
+import { OutcomeReport } from "@/components/whatsapp/OutcomeReport";
+import { loadOutcomeReport } from "@/lib/whatsapp/outcome-report";
 
 export default async function MetricasAtendimentoPage({
   searchParams,
@@ -20,7 +22,7 @@ export default async function MetricasAtendimentoPage({
   await requireFeature("whatsapp_gestao");
   const period = parseMetricsPeriod((await searchParams).periodo);
   const now = new Date();
-  const m = await loadSupportMetrics(period, now);
+  const [m, outcomes] = await Promise.all([loadSupportMetrics(period, now), loadOutcomeReport(period, now)]);
   const maxServed = Math.max(...m.agents.map((a) => a.conversations), 1);
 
   return (
@@ -101,6 +103,11 @@ export default async function MetricasAtendimentoPage({
             hint={`${m.sent} enviadas pela equipe`}
           />
         </div>
+      </section>
+
+      <section className="space-y-2">
+        <h2 className="text-xs font-medium uppercase tracking-wide text-ink-muted">Resultado dos atendimentos</h2>
+        <OutcomeReport report={outcomes} singleDay={period === "hoje"} />
       </section>
 
       <Card className="p-0 overflow-hidden">
@@ -197,6 +204,12 @@ export default async function MetricasAtendimentoPage({
         <p>
           <strong className="font-medium text-ink-secondary">Pelo celular:</strong> respostas mandadas direto do
           celular da linha, fora do CRM.
+        </p>
+        <p>
+          <strong className="font-medium text-ink-secondary">Resultado dos atendimentos:</strong> conta os atendimentos
+          abertos no período, com o resultado marcado na conversa (Venda, Orçamento ou Informação). A venda fica com o
+          atendente da conversa, mesmo que outra pessoa tenha clicado. &quot;Sem marcação&quot; são os finalizados sem
+          resultado; os que ainda estão em aberto aparecem como &quot;em andamento&quot;.
         </p>
       </div>
     </div>
