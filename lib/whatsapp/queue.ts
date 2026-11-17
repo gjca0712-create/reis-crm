@@ -164,11 +164,12 @@ export async function firstInQueue(
 // estejam em espera ou já com alguém — o mais antigo primeiro. A escolha da aba
 // fica num cookie (igual ao Meus/Equipe), pra sobreviver ao Resolvido/próxima.
 export const OVERDUE_MS = 4 * 60 * 60_000;
-export type QueueTab = "fila" | "atrasadas";
+// "retornos": orçamentos com retorno pro cliente marcado (lib/whatsapp/outcome.ts).
+export type QueueTab = "fila" | "atrasadas" | "retornos";
 export const QUEUE_TAB_COOKIE = "wa_suporte_aba";
 
 export function parseQueueTab(value: string | undefined): QueueTab {
-  return value === "atrasadas" ? "atrasadas" : "fila";
+  return value === "atrasadas" || value === "retornos" ? value : "fila";
 }
 
 // Desde quando cada conversa espera resposta: a primeira mensagem do cliente

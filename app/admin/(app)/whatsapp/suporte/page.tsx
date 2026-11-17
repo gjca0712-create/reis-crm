@@ -49,6 +49,8 @@ import { NewConversationDialog } from "@/components/whatsapp/NewConversationDial
 import { TransferDialog } from "@/components/whatsapp/TransferDialog";
 import { ContactInfo } from "@/components/whatsapp/ContactInfo";
 import { OutcomePicker } from "@/components/whatsapp/OutcomePicker";
+import { QuoteFollowUps, type FollowUpItem } from "@/components/whatsapp/QuoteFollowUps";
+import { followUpLabel, followUpMessage } from "@/lib/whatsapp/outcome";
 import { canAccess } from "@/lib/permissions";
 import { getSessionFeatures, requireFeature } from "@/lib/session";
 import {
@@ -58,6 +60,10 @@ import {
   sendSupportReply,
   resolveConversation,
   setConversationOutcome,
+  setOutcomeValue,
+  snoozeQuote,
+  closeQuote,
+  reopenQuote,
   claimConversation,
   releaseConversation,
   editSupportMessage,
@@ -90,7 +96,9 @@ const FINISHED_PAGE_SIZE = 30;
 export default async function WhatsappSuportePage({
   searchParams,
 }: {
-  searchParams: Promise<{ c?: string; aviso?: string; novo?: string; p?: string; anteriores?: string } & SupportFilterParams>;
+  searchParams: Promise<
+    { c?: string; aviso?: string; novo?: string; retorno?: string; p?: string; anteriores?: string } & SupportFilterParams
+  >;
 }) {
   const session = await requireFeature("whatsapp_suporte");
   const features = await getSessionFeatures(session);
@@ -139,6 +147,15 @@ export default async function WhatsappSuportePage({
   const newChatCustomer = params.novo
     ? await prisma.customer.findUnique({ where: { id: params.novo }, select: { id: true, name: true, phone: true } })
     : null;
+  // "Chamar" da aba Retornos (?novo=<cliente>&retorno=<conversa do orçamento>):
+  // a Nova conversa já vem com a mensagem de retorno e a linha em que ele falou.
+  const followUpQuote =
+    newChatCustomer && params.retorno
+      ? await prisma.conversation.findFirst({
+          where: { id: params.retorno, customerId: newChatCustomer.id, quoteStatus: "ABERTO" },
+          select: { id: true, line: true },
+        })
+      : null;
 
   const conversations = finished
     ? []
@@ -205,12 +222,53 @@ export default async function WhatsappSuportePage({
   // Aba "Sem resposta +4h": das que a pessoa vê (espera + as dela; Equipe:
   // todas), as que esperam resposta há mais de 4h — o contador aparece sempre.
   const overdue = overdueConversations(open, now);
+  // Aba "Retornos": orçamentos em aberto (os da pessoa; Equipe: de todos), o
+  // contador da aba sempre — são os de hoje e os atrasados.
+  const quoteRows = finished
+    ? []
+    : await prisma.conversation.findMany({
+        where: { quoteStatus: "ABERTO", ...(teamView ? {} : { outcomeAgentId: session.userId }) },
+        orderBy: { followUpAt: "asc" },
+        take: 300,
+        select: {
+          id: true,
+          number: true,
+          status: true,
+          assignedToId: true,
+          sector: true,
+          outcomeValue: true,
+          outcomeAt: true,
+          createdAt: true,
+          followUpAt: true,
+          followUpCount: true,
+          customer: { select: { id: true, name: true } },
+          outcomeAgent: { select: { name: true } },
+        },
+      });
+  const followUps: (FollowUpItem & { due: boolean })[] = quoteRows.map((q) => {
+    const followUpAt = q.followUpAt ?? now;
+    return {
+      id: q.id,
+      number: q.number,
+      customerId: q.customer.id,
+      customerName: q.customer.name,
+      value: q.outcomeValue === null ? null : Number(q.outcomeValue),
+      quotedAt: (q.outcomeAt ?? q.createdAt).toISOString(),
+      followUpAt: followUpAt.toISOString(),
+      calls: q.followUpCount,
+      agentName: teamView ? (q.outcomeAgent?.name ?? null) : null,
+      canOpen: canSeeFinished || (q.status === "OPEN" && !queueBlockReason(viewer, q)),
+      due: followUpLabel(followUpAt, now).due,
+    };
+  });
+  const dueFollowUps = followUps.filter((f) => f.due);
   // Sem ?c=, abre a primeira da fila (ou da aba +4h) — nunca uma finalizada
   // (igual ao firstInQueue, pra onde vai quem acabou de concluir um atendimento).
   // Nos finalizados, nada aberto até clicar, igual ao painel antigo.
   const activeId = finished
     ? params.c
-    : (params.c ?? (tab === "atrasadas" ? overdue[0]?.id : undefined) ?? open[0]?.id);
+    : (params.c ??
+      (tab === "retornos" ? undefined : ((tab === "atrasadas" ? overdue[0]?.id : undefined) ?? open[0]?.id)));
   const activeRaw = activeId
     ? await prisma.conversation.findUnique({
         where: { id: activeId },
@@ -269,8 +327,14 @@ export default async function WhatsappSuportePage({
               label: whatsappLineLabel(s.line),
               connected: s.status === "connected",
             }))}
+            // Remonta a cada cliente/retorno pedido (o "Chamar" é navegação
+            // dentro da mesma tela: sem a chave, ficaria com o anterior).
+            key={`${newChatCustomer?.id ?? ""}-${followUpQuote?.id ?? ""}`}
             initialCustomer={newChatCustomer}
             autoOpen={Boolean(newChatCustomer)}
+            initialBody={followUpQuote && newChatCustomer ? followUpMessage(newChatCustomer.name) : ""}
+            initialLine={followUpQuote?.line}
+            retornoId={followUpQuote?.id}
           />
         </div>
       </div>
@@ -373,7 +437,7 @@ export default async function WhatsappSuportePage({
             {!finished && (
               <div className="flex flex-wrap items-center justify-between gap-2">
                 <div className="inline-flex rounded-full bg-wa-panel p-0.5">
-                  {(["fila", "atrasadas"] as const).map((t) => (
+                  {(["fila", "atrasadas", "retornos"] as const).map((t) => (
                     <form key={t} action={setSupportTab.bind(null, t)}>
                       <button
                         type="submit"
@@ -382,10 +446,15 @@ export default async function WhatsappSuportePage({
                           tab === t ? "bg-wa-green/20 text-wa-green" : "text-wa-muted hover:text-wa-text"
                         }`}
                       >
-                        {t === "fila" ? "Fila" : "Sem resposta +4h"}
+                        {t === "fila" ? "Fila" : t === "atrasadas" ? "Sem resposta +4h" : "Retornos"}
                         {t === "atrasadas" && overdue.length > 0 && (
                           <span className="min-w-[18px] rounded-full bg-[rgb(244,63,94)] px-1 text-center text-[11px] font-semibold leading-[18px] text-white">
                             {overdue.length}
+                          </span>
+                        )}
+                        {t === "retornos" && dueFollowUps.length > 0 && (
+                          <span className="min-w-[18px] rounded-full bg-[#F08C4B] px-1 text-center text-[11px] font-semibold leading-[18px] text-wa-bg">
+                            {dueFollowUps.length}
                           </span>
                         )}
                       </button>
@@ -419,6 +488,12 @@ export default async function WhatsappSuportePage({
               page={page}
               pages={finishedPages}
               now={now}
+            />
+          ) : tab === "retornos" ? (
+            <QuoteFollowUps
+              due={dueFollowUps}
+              upcoming={followUps.filter((f) => !f.due)}
+              activeId={activeId}
             />
           ) : (
             <QueueList
@@ -524,8 +599,22 @@ export default async function WhatsappSuportePage({
                 // repetida faz o React duplicar o componente ao trocar de conversa).
                 key={`resultado-${active.id}`}
                 value={active.outcome}
-                action={setConversationOutcome.bind(null, active.id)}
+                amount={active.outcomeValue === null ? null : Number(active.outcomeValue)}
+                quote={
+                  active.quoteStatus
+                    ? {
+                        status: active.quoteStatus,
+                        followUpAt: active.followUpAt?.toISOString() ?? null,
+                        lostReason: active.quoteLostReason,
+                      }
+                    : null
+                }
                 open={active.status === "OPEN"}
+                action={setConversationOutcome.bind(null, active.id)}
+                setValue={setOutcomeValue.bind(null, active.id)}
+                snooze={snoozeQuote.bind(null, active.id)}
+                close={closeQuote.bind(null, active.id)}
+                reopen={reopenQuote.bind(null, active.id)}
               />
 
               {/* flex-col-reverse: a rolagem já começa no fim (mensagem mais

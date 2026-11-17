@@ -197,6 +197,19 @@ model Conversation {
   outcomeAgentId String?
   outcomeAgent   User?     @relation("ConversationOutcomes", fields: [outcomeAgentId], references: [id], onDelete: SetNull)
   outcomeAt      DateTime?
+  // Valor em R$ marcado junto com Venda ou Orçamento (opcional).
+  outcomeValue   Decimal?  @db.Decimal(12, 2)
+  // Orçamento → venda: quem foi marcado Orçamento ganha quoteStatus "ABERTO"
+  // e um retorno agendado (followUpAt) — aparece na aba Retornos do Suporte
+  // até alguém marcar que virou venda ("VENDIDO") ou não ("PERDIDO", com o
+  // motivo em quoteLostReason). followUpCount = quantas vezes já chamaram o
+  // cliente pelo retorno. Continua "VENDIDO" se a conversa passar de Orçamento
+  // pra Venda (é isso que mede a conversão).
+  quoteStatus     String?
+  quoteLostReason String?
+  quoteClosedAt   DateTime?
+  followUpAt      DateTime?
+  followUpCount   Int       @default(0)
 
   messages  Message[]
   rating    Rating?

@@ -209,7 +209,9 @@ export default async function MetricasAtendimentoPage({
           <strong className="font-medium text-ink-secondary">Resultado dos atendimentos:</strong> conta os atendimentos
           abertos no período, com o resultado marcado na conversa (Venda, Orçamento ou Informação). A venda fica com o
           atendente da conversa, mesmo que outra pessoa tenha clicado. &quot;Sem marcação&quot; são os finalizados sem
-          resultado; os que ainda estão em aberto aparecem como &quot;em andamento&quot;.
+          resultado; os que ainda estão em aberto aparecem como &quot;em andamento&quot;. Orçamento que vira venda: na
+          mesma conversa (Orçamento → Venda), pelo &quot;Vendeu&quot; da aba Retornos ou quando o mesmo cliente compra
+          numa conversa nova em até 60 dias.
         </p>
       </div>
     </div>

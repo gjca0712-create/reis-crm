@@ -18,14 +18,23 @@ type Recipient = { id?: string; name: string; phone: string };
 // perder o que foi digitado. Campos controlados de propósito — o React limpa
 // campo não controlado ao fim da action, e dando erro o texto sumiria.
 // initialCustomer + autoOpen: vindo da ficha do cliente (?novo=<id>).
+// retornoId + initialBody + initialLine: o "Chamar" da aba Retornos — a
+// mensagem de retorno do orçamento já escrita, pela linha em que o cliente
+// falou, e o envio conta a chamada no orçamento (startConversation).
 export function NewConversationDialog({
   lines,
   initialCustomer,
   autoOpen = false,
+  initialBody = "",
+  initialLine,
+  retornoId,
 }: {
   lines: Line[];
   initialCustomer?: ChatCustomerOption | null;
   autoOpen?: boolean;
+  initialBody?: string;
+  initialLine?: string;
+  retornoId?: string;
 }) {
   const router = useRouter();
   const dialog = useRef<HTMLDialogElement>(null);
@@ -33,8 +42,9 @@ export function NewConversationDialog({
   const [query, setQuery] = useState("");
   const [results, setResults] = useState<ChatCustomerOption[]>([]);
   const [newName, setNewName] = useState("");
-  const [body, setBody] = useState("");
-  const firstConnected = lines.find((l) => l.connected)?.id ?? "";
+  const [body, setBody] = useState(initialBody);
+  const firstConnected =
+    lines.find((l) => l.id === initialLine && l.connected)?.id ?? lines.find((l) => l.connected)?.id ?? "";
   const [line, setLine] = useState(firstConnected);
   const [state, formAction, pending] = useActionState(startConversation, undefined);
 
@@ -50,6 +60,7 @@ export function NewConversationDialog({
     // Tira o ?novo= da URL: senão um F5 depois reabriria a janela.
     const url = new URL(window.location.href);
     url.searchParams.delete("novo");
+    url.searchParams.delete("retorno");
     window.history.replaceState(null, "", url);
   }, [autoOpen]);
 
@@ -102,6 +113,7 @@ export function NewConversationDialog({
         className="m-auto w-[min(30rem,calc(100vw-2rem))] rounded-2xl border border-border bg-surface p-0 text-ink-primary backdrop:bg-black/70"
       >
         <form action={formAction} className="flex flex-col gap-4 p-5">
+          {retornoId && <input type="hidden" name="retorno" value={retornoId} />}
           <div className="flex items-center justify-between gap-3">
             <h2 id="nova-conversa-titulo" className="text-base font-semibold">
               Nova conversa

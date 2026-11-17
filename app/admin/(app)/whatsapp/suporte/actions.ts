@@ -25,7 +25,18 @@ import {
 } from "@/lib/whatsapp/start-conversation";
 import { saveMediaBuffer, mediaCategoryFromMimetype } from "@/lib/whatsapp/media";
 import { quoteSnippet } from "@/lib/whatsapp/quote";
-import { isConversationOutcome } from "@/lib/whatsapp/outcome";
+import {
+  FIRST_FOLLOW_UP_DAYS,
+  NEXT_FOLLOW_UP_DAYS,
+  followUpDate,
+  isConversationOutcome,
+  isFollowUpDays,
+  isQuoteLostReason,
+  parseMoney,
+  type ConversationOutcome,
+} from "@/lib/whatsapp/outcome";
+import type { Prisma } from "@prisma/client";
+import type { SessionPayload } from "@/lib/auth";
 import { VOICE_NOTE_MIMETYPE, oggOpusInfo } from "@/lib/whatsapp/voice-note";
 import {
   canManageQueue,
@@ -353,6 +364,8 @@ export async function startConversation(
     body: String(formData.get("body") || ""),
   });
   if (outcome && "conversationId" in outcome) {
+    const retorno = String(formData.get("retorno") || "");
+    if (retorno) await recordQuoteCall(session, retorno, outcome.conversationId);
     // Começou pelo "Nova conversa" de um atendimento finalizado: a tela volta
     // pra fila em aberto, onde a conversa nova está.
     const filters = parseSupportFiltersCookie((await cookies()).get(SUPPORT_FILTERS_COOKIE)?.value);
@@ -468,38 +481,240 @@ export async function resolveConversation(conversationId: string) {
 // O crédito no relatório vai pro atendente da conversa — quem está com ela, ou
 // quem finalizou —, não pra quem clicou: o gerente corrigindo a marcação de um
 // atendimento antigo não "rouba" a venda. Conversa de ninguém: quem marcou.
-export async function setConversationOutcome(
-  conversationId: string,
-  outcome: string | null
-): Promise<{ error?: string }> {
-  const session = await requireFeature("whatsapp_suporte");
-  if (outcome !== null && !isConversationOutcome(outcome)) return { error: "Opção inválida." };
-  const viewer = await loadQueueViewer(session);
 
+type ActionResult = { error?: string };
+
+// Quem pode marcar o resultado: quem pode abrir a conversa (finalizada, só
+// CEO/Gerente — a tela já não mostra pros outros).
+async function loadOutcomeTarget(session: SessionPayload, conversationId: string) {
+  const viewer = await loadQueueViewer(session);
   const conversation = await prisma.conversation.findUnique({
     where: { id: conversationId },
-    select: { status: true, assignedToId: true, sector: true, resolvedById: true },
+    select: {
+      status: true,
+      assignedToId: true,
+      sector: true,
+      resolvedById: true,
+      customerId: true,
+      outcome: true,
+      quoteStatus: true,
+      quoteClosedAt: true,
+      followUpAt: true,
+    },
   });
-  if (!conversation) return { error: "Essa conversa não existe mais." };
-  if (queueBlockReason(viewer, conversation)) return { error: "Essa conversa está com outro atendente agora." };
-  // Finalizada é histórico, que só CEO/Gerente abrem (a tela já não mostra).
+  if (!conversation) return { error: "Essa conversa não existe mais." } as const;
+  if (queueBlockReason(viewer, conversation)) return { error: "Essa conversa está com outro atendente agora." } as const;
   if (conversation.status !== "OPEN" && !canAccess(await getSessionFeatures(session), "whatsapp_gestao")) {
-    return { error: "Esse atendimento já foi finalizado." };
+    return { error: "Esse atendimento já foi finalizado." } as const;
   }
+  return { conversation } as const;
+}
 
-  await prisma.conversation.update({
-    where: { id: conversationId },
-    data: outcome
+// O que muda no orçamento quando o resultado muda. Orçamento abre (com retorno
+// pra amanhã); Orçamento → Venda conta como orçamento que virou venda; qualquer
+// outra coisa desfaz o orçamento (foi marcado errado).
+function quoteFieldsFor(
+  current: { quoteStatus: string | null; quoteClosedAt: Date | null; followUpAt: Date | null },
+  next: ConversationOutcome | null,
+  now: Date
+): Prisma.ConversationUpdateInput {
+  if (next === "ORCAMENTO") {
+    return {
+      quoteStatus: "ABERTO",
+      quoteLostReason: null,
+      quoteClosedAt: null,
+      followUpAt:
+        current.quoteStatus === "ABERTO" && current.followUpAt
+          ? current.followUpAt
+          : followUpDate(FIRST_FOLLOW_UP_DAYS, now),
+    };
+  }
+  if (next === "VENDA") {
+    return current.quoteStatus
       ? {
-          outcome,
-          outcomeAgentId: conversation.assignedToId ?? conversation.resolvedById ?? session.userId,
-          outcomeAt: new Date(),
+          quoteStatus: "VENDIDO",
+          quoteLostReason: null,
+          quoteClosedAt: current.quoteStatus === "VENDIDO" ? current.quoteClosedAt : now,
+          followUpAt: null,
         }
-      : { outcome: null, outcomeAgentId: null, outcomeAt: null },
-  });
+      : {};
+  }
+  return {
+    quoteStatus: null,
+    quoteLostReason: null,
+    quoteClosedAt: null,
+    followUpAt: null,
+    followUpCount: 0,
+    outcomeValue: null,
+  };
+}
+
+// Venda de um cliente fecha os orçamentos em aberto dele (dos últimos 60
+// dias) como "virou venda": o cliente que pediu orçamento e voltou depois pra
+// comprar, numa conversa nova.
+const QUOTE_MATCH_DAYS = 60;
+
+export async function setConversationOutcome(conversationId: string, outcome: string | null): Promise<ActionResult> {
+  const session = await requireFeature("whatsapp_suporte");
+  if (outcome !== null && !isConversationOutcome(outcome)) return { error: "Opção inválida." };
+  const target = await loadOutcomeTarget(session, conversationId);
+  if ("error" in target) return { error: target.error };
+  const { conversation } = target;
+  const now = new Date();
+
+  await prisma.$transaction([
+    prisma.conversation.update({
+      where: { id: conversationId },
+      data: {
+        ...(outcome
+          ? {
+              outcome,
+              outcomeAgent: {
+                connect: { id: conversation.assignedToId ?? conversation.resolvedById ?? session.userId },
+              },
+              outcomeAt: now,
+            }
+          : { outcome: null, outcomeAgent: { disconnect: true }, outcomeAt: null }),
+        ...quoteFieldsFor(conversation, outcome, now),
+      },
+    }),
+    ...(outcome === "VENDA"
+      ? [
+          prisma.conversation.updateMany({
+            where: {
+              customerId: conversation.customerId,
+              id: { not: conversationId },
+              quoteStatus: "ABERTO",
+              createdAt: { gte: new Date(now.getTime() - QUOTE_MATCH_DAYS * 86_400_000) },
+            },
+            data: { quoteStatus: "VENDIDO", quoteClosedAt: now, followUpAt: null },
+          }),
+        ]
+      : []),
+  ]);
 
   refreshSupport();
   return {};
+}
+
+// Valor em R$ da venda ou do orçamento ("" apaga).
+export async function setOutcomeValue(conversationId: string, raw: string): Promise<ActionResult> {
+  const session = await requireFeature("whatsapp_suporte");
+  const target = await loadOutcomeTarget(session, conversationId);
+  if ("error" in target) return { error: target.error };
+  if (target.conversation.outcome !== "VENDA" && target.conversation.outcome !== "ORCAMENTO") {
+    return { error: "Marque Venda ou Orçamento antes do valor." };
+  }
+  const value = parseMoney(raw);
+  if (value === undefined) return { error: "Valor inválido — ex.: 1.250,00" };
+
+  await prisma.conversation.update({ where: { id: conversationId }, data: { outcomeValue: value } });
+  refreshSupport();
+  return {};
+}
+
+// --- Retornos de orçamento (aba Retornos do Suporte e a conversa) ---------------
+// Quem pode mexer: o atendente do orçamento, quem está com a conversa agora e
+// CEO/Gerente. Vale também pra conversa já finalizada — o atendente não abre
+// ela de novo, mas o orçamento continua sendo dele.
+async function loadQuote(session: SessionPayload, conversationId: string) {
+  const quote = await prisma.conversation.findUnique({
+    where: { id: conversationId },
+    select: { quoteStatus: true, outcomeAgentId: true, assignedToId: true },
+  });
+  if (!quote?.quoteStatus) return { error: "Esse orçamento não existe mais." } as const;
+  const allowed =
+    canManageQueue(session.role) || quote.outcomeAgentId === session.userId || quote.assignedToId === session.userId;
+  if (!allowed) return { error: "Esse orçamento é de outro atendente." } as const;
+  return { quote } as const;
+}
+
+// "Adiar" / "Retornar em": o próximo retorno, N dias pra frente (8h da loja).
+export async function snoozeQuote(conversationId: string, days: number): Promise<ActionResult> {
+  const session = await requireFeature("whatsapp_suporte");
+  if (!isFollowUpDays(days)) return { error: "Opção inválida." };
+  const target = await loadQuote(session, conversationId);
+  if ("error" in target) return { error: target.error };
+  if (target.quote.quoteStatus !== "ABERTO") return { error: "Esse orçamento já foi fechado." };
+
+  await prisma.conversation.update({ where: { id: conversationId }, data: { followUpAt: followUpDate(days) } });
+  refreshSupport();
+  return {};
+}
+
+// Fecha o orçamento: "VENDIDO" (comprou — na loja, por telefone...: a conversa
+// passa a contar como Venda) ou "PERDIDO" (com o motivo).
+export async function closeQuote(
+  conversationId: string,
+  result: "VENDIDO" | "PERDIDO",
+  reason?: string
+): Promise<ActionResult> {
+  const session = await requireFeature("whatsapp_suporte");
+  const target = await loadQuote(session, conversationId);
+  if ("error" in target) return { error: target.error };
+  const now = new Date();
+
+  await prisma.conversation.update({
+    where: { id: conversationId },
+    data:
+      result === "VENDIDO"
+        ? {
+            outcome: "VENDA",
+            outcomeAt: now,
+            quoteStatus: "VENDIDO",
+            quoteLostReason: null,
+            quoteClosedAt: now,
+            followUpAt: null,
+          }
+        : {
+            outcome: "ORCAMENTO",
+            quoteStatus: "PERDIDO",
+            quoteLostReason: isQuoteLostReason(reason) ? reason : "OUTRO",
+            quoteClosedAt: now,
+            followUpAt: null,
+          },
+  });
+  refreshSupport();
+  return {};
+}
+
+// Desfaz o "não fechou" (clique errado ou o cliente voltou): em aberto de novo,
+// com retorno pra amanhã.
+export async function reopenQuote(conversationId: string): Promise<ActionResult> {
+  const session = await requireFeature("whatsapp_suporte");
+  const target = await loadQuote(session, conversationId);
+  if ("error" in target) return { error: target.error };
+
+  await prisma.conversation.update({
+    where: { id: conversationId },
+    data: {
+      outcome: "ORCAMENTO",
+      quoteStatus: "ABERTO",
+      quoteLostReason: null,
+      quoteClosedAt: null,
+      followUpAt: followUpDate(FIRST_FOLLOW_UP_DAYS),
+    },
+  });
+  refreshSupport();
+  return {};
+}
+
+// Mensagem do retorno saiu (Nova conversa aberta pelo "Chamar" da aba
+// Retornos): conta a chamada e agenda o próximo retorno, caso o cliente não
+// responda. Sem permissão, já fechado ou mensagem pra outro cliente (a janela
+// ficou aberta e escolheram outro): ignora — a mensagem já foi.
+async function recordQuoteCall(session: SessionPayload, quoteId: string, sentConversationId: string) {
+  const target = await loadQuote(session, quoteId);
+  if ("error" in target || target.quote.quoteStatus !== "ABERTO") return;
+  const [quote, sent] = await Promise.all([
+    prisma.conversation.findUnique({ where: { id: quoteId }, select: { customerId: true } }),
+    prisma.conversation.findUnique({ where: { id: sentConversationId }, select: { customerId: true } }),
+  ]);
+  if (!quote || quote.customerId !== sent?.customerId) return;
+  await prisma.conversation.update({
+    where: { id: quoteId },
+    data: { followUpCount: { increment: 1 }, followUpAt: followUpDate(NEXT_FOLLOW_UP_DAYS) },
+  });
 }
 
 // --- Editar / apagar pra todos uma mensagem já enviada -------------------------

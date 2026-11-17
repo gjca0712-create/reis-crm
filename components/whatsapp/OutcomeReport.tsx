@@ -3,8 +3,9 @@
 import { useRef, useState, type PointerEvent } from "react";
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from "recharts";
 import { CHART_INK } from "@/lib/chart-colors";
-import { CONVERSATION_OUTCOMES, UNMARKED_COLOR, outcomeTotal } from "@/lib/whatsapp/outcome";
-import type { OutcomeReport as Report } from "@/lib/whatsapp/outcome-report";
+import { formatCurrency } from "@/lib/format";
+import { CONVERSATION_OUTCOMES, UNMARKED_COLOR, outcomeInfo, outcomeTotal } from "@/lib/whatsapp/outcome";
+import type { OutcomeReport as Report, QuoteFunnel } from "@/lib/whatsapp/outcome-report";
 
 // Relatório "Resultado dos atendimentos" da tela de Métricas: o geral da loja
 // (números, divisão e um gráfico por dia) e a comparação entre atendentes.
@@ -13,6 +14,9 @@ import type { OutcomeReport as Report } from "@/lib/whatsapp/outcome-report";
 // único jeito de ler.
 
 const pct = (n: number, of: number) => (of ? Math.round((n / of) * 100) : 0);
+const money = (v: number) => (v > 0 ? formatCurrency(v) : "sem valor marcado");
+const VENDA_COLOR = outcomeInfo("VENDA")!.color;
+const ORCAMENTO_COLOR = outcomeInfo("ORCAMENTO")!.color;
 
 // "2026-11-16" → "16/11", sem passar por new Date() (que leria em UTC).
 function dayLabel(key: string) {
@@ -126,6 +130,9 @@ export function OutcomeReport({ report, singleDay }: { report: Report; singleDay
             <div className="text-2xl font-semibold text-ink-primary tabular-nums">{total[o.id]}</div>
             <div className="text-xs text-ink-muted mt-1">
               {marked ? `${pct(total[o.id], marked)}% dos marcados` : "Nenhum marcado"}
+              {o.id !== "INFORMACAO" && report.value[o.id] > 0 && (
+                <span className="text-ink-secondary"> · {formatCurrency(report.value[o.id])}</span>
+              )}
             </div>
           </div>
         ))}
@@ -232,6 +239,8 @@ export function OutcomeReport({ report, singleDay }: { report: Report; singleDay
         )}
       </div>
 
+      <QuoteFunnelCard quotes={report.quotes} />
+
       <div className="rounded-2xl border border-border bg-surface overflow-hidden">
         <div className="px-5 pt-5 pb-4 flex flex-wrap items-end justify-between gap-x-4 gap-y-2">
           <div>
@@ -254,6 +263,10 @@ export function OutcomeReport({ report, singleDay }: { report: Report; singleDay
                 <th className="font-medium py-3 px-4 text-right">Sem marcação</th>
                 <th className="font-medium py-3 px-4 text-right" title="Vendas ÷ atendimentos marcados">
                   % de venda
+                </th>
+                <th className="font-medium py-3 px-4 text-right">R$ vendido</th>
+                <th className="font-medium py-3 px-4 text-right" title="Orçamentos dele que viraram venda">
+                  Orçamento → venda
                 </th>
               </tr>
             </thead>
@@ -303,12 +316,25 @@ export function OutcomeReport({ report, singleDay }: { report: Report; singleDay
                     <td className="py-3 px-4 text-right tabular-nums text-ink-secondary">
                       {agentMarked ? `${pct(a.counts.VENDA, agentMarked)}%` : "—"}
                     </td>
+                    <td className="py-3 px-4 text-right tabular-nums whitespace-nowrap text-ink-primary">
+                      {a.soldValue > 0 ? formatCurrency(a.soldValue) : <span className="text-ink-muted">—</span>}
+                    </td>
+                    <td className="py-3 px-4 text-right tabular-nums whitespace-nowrap text-ink-secondary">
+                      {a.quotes ? (
+                        <>
+                          {a.quotesWon} de {a.quotes}{" "}
+                          <span className="text-ink-primary font-medium">({pct(a.quotesWon, a.quotes)}%)</span>
+                        </>
+                      ) : (
+                        <span className="text-ink-muted">—</span>
+                      )}
+                    </td>
                   </tr>
                 );
               })}
               {report.agents.length === 0 && (
                 <tr>
-                  <td colSpan={7} className="py-8 text-center text-ink-muted">
+                  <td colSpan={9} className="py-8 text-center text-ink-muted">
                     Nenhum atendimento com atendente no período.
                   </td>
                 </tr>
@@ -318,6 +344,95 @@ export function OutcomeReport({ report, singleDay }: { report: Report; singleDay
           {agentHover.node}
         </div>
       </div>
+    </div>
+  );
+}
+
+// Orçamento → venda: quantos orçamentos do período já viraram venda, quantos
+// estão em aberto (com retorno marcado na aba Retornos) e por que os outros
+// não fecharam.
+function QuoteFunnelCard({ quotes }: { quotes: QuoteFunnel }) {
+  const hover = useHoverTip();
+  const maxReason = Math.max(...quotes.lostReasons.map((r) => r.count), 1);
+  const cell = (label: string, value: number, hint: React.ReactNode, color?: string) => (
+    <div>
+      <div className="flex items-center gap-2 text-sm text-ink-secondary">
+        {color && <Dot color={color} />} {label}
+      </div>
+      <div className="text-2xl font-semibold text-ink-primary tabular-nums mt-1">{value}</div>
+      <div className="text-xs text-ink-muted mt-0.5">{hint}</div>
+    </div>
+  );
+
+  return (
+    <div className="rounded-2xl border border-border bg-surface p-5 space-y-5">
+      <div className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1">
+        <h3 className="text-sm font-semibold text-ink-primary">Orçamentos que viraram venda</h3>
+        <span className="text-xs text-ink-muted">
+          {quotes.made} orçamento{quotes.made === 1 ? "" : "s"} no período
+        </span>
+      </div>
+      {quotes.made === 0 ? (
+        <p className="text-sm text-ink-muted">
+          Nenhum orçamento no período. Ao marcar Orçamento na conversa, o retorno pro cliente aparece na aba Retornos do
+          Suporte.
+        </p>
+      ) : (
+        <>
+          <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+            {cell("Orçamentos feitos", quotes.made, money(quotes.madeValue))}
+            {cell(
+              "Viraram venda",
+              quotes.won,
+              <>
+                <span className="text-ink-primary font-medium">{pct(quotes.won, quotes.made)}%</span>
+                {quotes.wonValue > 0 && ` · ${formatCurrency(quotes.wonValue)}`}
+              </>,
+              VENDA_COLOR
+            )}
+            {cell(
+              "Em aberto",
+              quotes.open,
+              <>
+                {money(quotes.openValue)}
+                {quotes.late > 0 && (
+                  <span className="block text-status-critical">
+                    {quotes.late} com retorno atrasado
+                  </span>
+                )}
+              </>,
+              ORCAMENTO_COLOR
+            )}
+            {cell("Não fecharam", quotes.lost, `${pct(quotes.lost, quotes.made)}%`, UNMARKED_COLOR)}
+          </div>
+          <div ref={hover.box} className="relative">
+            <StackedBar
+              height="h-4"
+              hover={hover}
+              segments={[
+                { key: "won", value: quotes.won, color: VENDA_COLOR, tip: `Viraram venda: ${quotes.won}` },
+                { key: "open", value: quotes.open, color: ORCAMENTO_COLOR, tip: `Em aberto: ${quotes.open}` },
+                { key: "lost", value: quotes.lost, color: UNMARKED_COLOR, tip: `Não fecharam: ${quotes.lost}` },
+              ]}
+            />
+            {hover.node}
+          </div>
+          {quotes.lostReasons.length > 0 && (
+            <div className="space-y-2">
+              <h4 className="text-xs font-medium uppercase tracking-wide text-ink-muted">Por que não fechou</h4>
+              {quotes.lostReasons.map((r) => (
+                <div key={r.id} className="flex items-center gap-3 text-sm">
+                  <span className="w-32 sm:w-44 shrink-0 truncate text-ink-secondary">{r.label}</span>
+                  <div className="flex-1 h-2 rounded bg-surface-raised">
+                    <div className="h-full rounded bg-ink-muted" style={{ width: `${(r.count / maxReason) * 100}%` }} />
+                  </div>
+                  <span className="w-8 text-right tabular-nums text-ink-primary">{r.count}</span>
+                </div>
+              ))}
+            </div>
+          )}
+        </>
+      )}
     </div>
   );
 }
