@@ -10,6 +10,7 @@ import {
   quoteLostReasonLabel,
   type ConversationOutcome,
 } from "@/lib/whatsapp/outcome";
+import { BAIRROS_PADRAO } from "@/lib/constants";
 
 type Result = { error?: string };
 
@@ -36,10 +37,16 @@ export function OutcomePicker({
   snooze,
   close,
   reopen,
+  signup,
+  saveContact,
 }: {
   value: string | null;
   amount: number | null;
   quote: PickerQuote | null;
+  // Cliente ainda sem nome ou bairro: em Venda e Orçamento aparece o lembrete
+  // pra completar ali mesmo (não trava nada; "Agora não" esconde).
+  signup: { name: string; bairro: string } | null;
+  saveContact: (formData: FormData) => Promise<Result>;
   // Conversa em aberto: mostra o lembrete de marcar antes de finalizar.
   open: boolean;
   action: (outcome: ConversationOutcome | null) => Promise<Result>;
@@ -52,6 +59,8 @@ export function OutcomePicker({
   const [pending, startTransition] = useTransition();
   const [error, setError] = useState<string | null>(null);
   const [money, setMoney] = useState(moneyInput(amount));
+  // Lembrete do cadastro já respondido nesta conversa (salvo ou "Agora não").
+  const [signupDone, setSignupDone] = useState(false);
   // Valor novo vindo do servidor (outro atendente, ou o próprio depois de salvar).
   useEffect(() => setMoney(moneyInput(amount)), [amount]);
 
@@ -72,6 +81,15 @@ export function OutcomePicker({
   function saveMoney() {
     if (money.trim() === moneyInput(amount)) return;
     run(() => setValue(money));
+  }
+
+  function saveSignup(formData: FormData) {
+    setError(null);
+    startTransition(async () => {
+      const result = await saveContact(formData);
+      if (result.error) setError(result.error);
+      else setSignupDone(true);
+    });
   }
 
   const withValue = current === "VENDA" || current === "ORCAMENTO";
@@ -185,6 +203,43 @@ export function OutcomePicker({
             <span className="text-wa-muted">Veio de um orçamento ✓</span>
           )}
         </div>
+      )}
+
+      {withValue && signup && !signupDone && (
+        <form action={saveSignup} className="flex flex-wrap items-center gap-x-2 gap-y-1.5">
+          <span className="text-wa-text">Complete o cadastro:</span>
+          <input
+            name="name"
+            required
+            defaultValue={signup.name}
+            placeholder="Nome"
+            aria-label="Nome do cliente"
+            className="w-44 rounded-full border border-wa-border bg-wa-bg px-2.5 py-1 text-wa-text placeholder:text-wa-muted/60 focus:outline-none focus:ring-1 focus:ring-wa-green"
+          />
+          <input
+            name="bairro"
+            defaultValue={signup.bairro}
+            list="resultado-bairros"
+            placeholder="Bairro"
+            aria-label="Bairro do cliente"
+            className="w-36 rounded-full border border-wa-border bg-wa-bg px-2.5 py-1 text-wa-text placeholder:text-wa-muted/60 focus:outline-none focus:ring-1 focus:ring-wa-green"
+          />
+          <datalist id="resultado-bairros">
+            {BAIRROS_PADRAO.map((b) => (
+              <option key={b} value={b} />
+            ))}
+          </datalist>
+          <button
+            type="submit"
+            disabled={pending}
+            className="rounded-full bg-wa-green px-3 py-1 font-medium text-wa-bg hover:brightness-110 disabled:opacity-60"
+          >
+            Salvar
+          </button>
+          <button type="button" onClick={() => setSignupDone(true)} className="text-wa-muted hover:text-wa-text">
+            Agora não
+          </button>
+        </form>
       )}
 
       {error && <p className="text-status-critical">{error}</p>}

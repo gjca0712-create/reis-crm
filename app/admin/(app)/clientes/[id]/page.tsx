@@ -11,6 +11,7 @@ import {
   Handshake,
   Cake,
   HardHat,
+  UserPlus,
   type LucideIcon,
 } from "lucide-react";
 import { prisma } from "@/lib/prisma";
@@ -21,6 +22,11 @@ import { Card } from "@/components/ui/Card";
 import { Badge } from "@/components/ui/Badge";
 import { requireFeature, getSessionFeatures } from "@/lib/session";
 import { canAccess } from "@/lib/permissions";
+import { followUpLabel, outcomeInfo, quoteLostReasonLabel } from "@/lib/whatsapp/outcome";
+import { whatsappLineLabel } from "@/lib/whatsapp/lines";
+
+// Atendimentos do WhatsApp mostrados na ficha (os mais recentes).
+const CONVERSATIONS_SHOWN = 15;
 
 export default async function ClienteDetailPage({ params }: { params: Promise<{ id: string }> }) {
   const session = await requireFeature("clientes");
@@ -32,10 +38,30 @@ export default async function ClienteDetailPage({ params }: { params: Promise<{ 
     include: {
       referredBy: true,
       sales: { orderBy: { date: "desc" }, include: { partner: { select: { name: true } }, items: true } },
+      conversations: {
+        orderBy: { createdAt: "desc" },
+        take: CONVERSATIONS_SHOWN,
+        select: {
+          id: true,
+          number: true,
+          createdAt: true,
+          line: true,
+          status: true,
+          outcome: true,
+          outcomeValue: true,
+          quoteStatus: true,
+          quoteLostReason: true,
+          followUpAt: true,
+          outcomeAgent: { select: { name: true } },
+          assignedTo: { select: { name: true } },
+        },
+      },
+      _count: { select: { conversations: true } },
     },
   });
 
   if (!customer) notFound();
+  const now = new Date();
 
   const bucket = recencyBucket(customer.sales[0]?.date ?? null);
   const totalGasto = customer.sales.reduce((sum, s) => sum + s.total, 0);
@@ -60,7 +86,9 @@ export default async function ClienteDetailPage({ params }: { params: Promise<{ 
               </Badge>
             )}
           </div>
-          <p className="text-sm text-ink-muted mt-0.5">Cliente desde {formatDate(customer.createdAt)}</p>
+          <p className="text-sm text-ink-muted mt-0.5">
+            {customer.isContact ? "Contato desde" : "Cliente desde"} {formatDate(customer.createdAt)}
+          </p>
         </div>
         <div className="flex items-center gap-2">
           <Link
@@ -89,6 +117,21 @@ export default async function ClienteDetailPage({ params }: { params: Promise<{ 
           </a>
         </div>
       </div>
+
+      {customer.isContact && (
+        <div className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-gold-400/40 bg-gold-400/10 px-5 py-4">
+          <p className="text-sm text-ink-secondary">
+            <span className="font-medium text-ink-primary">Contato do WhatsApp, ainda sem cadastro.</span> Fica em
+            “Contatos do WhatsApp” até alguém completar nome e bairro, ou até ele comprar.
+          </p>
+          <Link
+            href={`/admin/clientes/${customer.id}/editar`}
+            className="inline-flex items-center gap-2 rounded-lg bg-gold-400 text-page px-4 py-2 text-sm font-semibold hover:bg-gold-300 transition-colors"
+          >
+            <UserPlus className="w-4 h-4" /> Completar cadastro
+          </Link>
+        </div>
+      )}
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
         <Card className="lg:col-span-2 space-y-4">
@@ -132,6 +175,75 @@ export default async function ClienteDetailPage({ params }: { params: Promise<{ 
           </Card>
         </div>
       </div>
+
+      <Card title="Atendimentos no WhatsApp">
+        {customer.conversations.length === 0 ? (
+          <p className="text-sm text-ink-muted">Nenhum atendimento pelo WhatsApp ainda.</p>
+        ) : (
+          <div className="space-y-3">
+            <ul className="divide-y divide-border/60">
+              {customer.conversations.map((c) => {
+                const outcome = outcomeInfo(c.outcome);
+                const value = c.outcomeValue === null ? 0 : Number(c.outcomeValue);
+                const agent = c.outcomeAgent?.name ?? c.assignedTo?.name;
+                return (
+                  <li key={c.id} className="flex flex-wrap items-center justify-between gap-x-4 gap-y-1 py-2.5 text-sm">
+                    <div className="min-w-0">
+                      <span className="text-ink-primary font-medium">#{c.number}</span>
+                      <span className="text-ink-muted">
+                        {" "}
+                        · {formatDate(c.createdAt)} · {whatsappLineLabel(c.line)}
+                        {agent && ` · ${agent}`}
+                        {c.status === "OPEN" && " · em aberto"}
+                      </span>
+                    </div>
+                    <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+                      {outcome ? (
+                        <span className="inline-flex items-center gap-1.5 text-ink-primary">
+                          <span className="w-2 h-2 rounded-full" style={{ backgroundColor: outcome.color }} aria-hidden />
+                          {outcome.label}
+                          {value > 0 && <span className="tabular-nums text-ink-secondary">{formatCurrency(value)}</span>}
+                        </span>
+                      ) : (
+                        <span className="text-ink-muted">Sem resultado marcado</span>
+                      )}
+                      {c.quoteStatus === "ABERTO" && (
+                        <span className="text-ink-muted">
+                          retorno {c.followUpAt ? followUpLabel(c.followUpAt, now).text : "amanhã"}
+                        </span>
+                      )}
+                      {c.quoteStatus === "VENDIDO" && c.outcome !== "VENDA" && (
+                        <span className="text-ink-muted">virou venda</span>
+                      )}
+                      {c.quoteStatus === "VENDIDO" && c.outcome === "VENDA" && (
+                        <span className="text-ink-muted">veio de um orçamento</span>
+                      )}
+                      {c.quoteStatus === "PERDIDO" && (
+                        <span className="text-ink-muted">
+                          não fechou · {quoteLostReasonLabel(c.quoteLostReason) ?? "sem motivo"}
+                        </span>
+                      )}
+                      {canChat && (
+                        <Link
+                          href={`/admin/whatsapp/suporte?c=${c.id}`}
+                          className="text-gold-400 hover:text-gold-300"
+                        >
+                          Abrir
+                        </Link>
+                      )}
+                    </div>
+                  </li>
+                );
+              })}
+            </ul>
+            {customer._count.conversations > customer.conversations.length && (
+              <p className="text-xs text-ink-muted">
+                Mostrando os {customer.conversations.length} mais recentes de {customer._count.conversations}.
+              </p>
+            )}
+          </div>
+        )}
+      </Card>
 
       <Card title="Histórico de compras">
         {customer.sales.length === 0 ? (

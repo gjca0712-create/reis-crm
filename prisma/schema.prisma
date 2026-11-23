@@ -85,6 +85,12 @@ model Customer {
   // Fase da obra do cliente: INICIO, MEIO ou FIM — sinaliza que tipo de
   // material ele tende a precisar comprar em seguida.
   faseObra      String?
+  // Contato do WhatsApp ainda sem cadastro: criado sozinho por uma mensagem
+  // (ou pela Nova conversa do Suporte), só com o telefone e o nome do perfil.
+  // Fica na aba "Contatos do WhatsApp" e não na lista de Clientes. Vira cliente
+  // (false) quando alguém completa nome e bairro, quando um atendimento dele é
+  // marcado Venda ou quando uma venda é registrada pra ele.
+  isContact     Boolean  @default(false)
 
   // Identificador alternativo (@lid) que o WhatsApp usa pra esse contato em vez
   // do número de telefone, em parte da migração deles pra endereçamento por

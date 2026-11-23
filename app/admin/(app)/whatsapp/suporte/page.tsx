@@ -51,6 +51,8 @@ import { ContactInfo } from "@/components/whatsapp/ContactInfo";
 import { OutcomePicker } from "@/components/whatsapp/OutcomePicker";
 import { QuoteFollowUps, type FollowUpItem } from "@/components/whatsapp/QuoteFollowUps";
 import { followUpLabel, followUpMessage } from "@/lib/whatsapp/outcome";
+import { hasBairro, isPhoneName, needsSignup } from "@/lib/customers/contact";
+import { PROFISSAO_LABELS } from "@/lib/constants";
 import { canAccess } from "@/lib/permissions";
 import { getSessionFeatures, requireFeature } from "@/lib/session";
 import {
@@ -64,6 +66,7 @@ import {
   snoozeQuote,
   closeQuote,
   reopenQuote,
+  saveContactDetails,
   claimConversation,
   releaseConversation,
   editSupportMessage,
@@ -303,6 +306,15 @@ export default async function WhatsappSuportePage({
     active?.status === "OPEN"
       ? (await transferAgents()).filter((a) => a.id !== session.userId && a.id !== active.assignedTo?.id)
       : [];
+  // Cadastro do cliente pela conversa (Dados do contato e lembrete do resultado).
+  const partnerOptions = active
+    ? (
+        await prisma.partner.findMany({ orderBy: { name: "asc" }, select: { id: true, name: true, profissao: true } })
+      ).map((p) => ({ id: p.id, label: `${p.name} · ${PROFISSAO_LABELS[p.profissao] ?? p.profissao}` }))
+    : [];
+  const signupMissing = active ? needsSignup(active.customer) : false;
+  const nameIsPhone = active ? isPhoneName(active.customer.name, active.customer.phone) : false;
+  const knownBairro = active && hasBairro(active.customer.bairro) ? active.customer.bairro : "";
 
   return (
     <div className="space-y-4">
@@ -513,6 +525,8 @@ export default async function WhatsappSuportePage({
                 <ContactInfo
                   key={active.customer.id}
                   canOpenCustomer={canAccess(features, "clientes")}
+                  partners={partnerOptions}
+                  save={saveContactDetails.bind(null, active.id)}
                   contact={{
                     id: active.customer.id,
                     name: active.customer.name,
@@ -520,13 +534,19 @@ export default async function WhatsappSuportePage({
                     phoneLabel: formatPhone(active.customer.phone),
                     details: [
                       formatPhone(active.customer.phone),
-                      active.customer.bairro,
+                      knownBairro || (active.customer.isContact ? "sem cadastro" : ""),
                       whatsappLineLabel(active.line),
                       active.sector && sectorLabel(active.sector),
                     ]
                       .filter(Boolean)
                       .join(" · "),
-                    bairro: active.customer.bairro,
+                    bairro: knownBairro,
+                    faseObra: active.customer.faseObra,
+                    referredById: active.customer.referredById,
+                    notes: active.customer.notes,
+                    isContact: active.customer.isContact,
+                    signupMissing,
+                    nameIsPhone,
                     customerSince: formatDate(active.customer.createdAt),
                     whatsappUrl: whatsappLink(active.customer.phone),
                   }}
@@ -615,6 +635,10 @@ export default async function WhatsappSuportePage({
                 snooze={snoozeQuote.bind(null, active.id)}
                 close={closeQuote.bind(null, active.id)}
                 reopen={reopenQuote.bind(null, active.id)}
+                signup={
+                  signupMissing ? { name: nameIsPhone ? "" : active.customer.name, bairro: knownBairro } : null
+                }
+                saveContact={saveContactDetails.bind(null, active.id)}
               />
 
               {/* flex-col-reverse: a rolagem já começa no fim (mensagem mais

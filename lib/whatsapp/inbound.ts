@@ -1,6 +1,7 @@
 import { prisma } from "@/lib/prisma";
 import { normalizePhone, phoneVariants } from "@/lib/phone";
 import { formatPhone } from "@/lib/format";
+import { BAIRRO_NAO_INFORMADO } from "@/lib/customers/contact";
 import type { WhatsAppLineId } from "./lines";
 import type { MediaCategory } from "./media";
 import { closingKind } from "./closing";
@@ -213,12 +214,14 @@ async function processInboundWhatsAppMessageLocked(
     // dela (pushName) quando o número ainda não está "salvo" (não temos esse
     // conceito de agenda — todo contato novo cai aqui); sem isso, mostra o
     // telefone inteiro em vez de um "Contato 1234" sem sentido nenhum.
+    // Entra como contato (isContact): só vira cliente na lista de Clientes
+    // quando completarem o cadastro ou ele comprar.
     customer = await prisma.customer.create({
       data: {
         name: pushName?.trim() || formatPhone(phone),
         phone,
-        bairro: "Não informado",
-        notes: "Cadastrado automaticamente a partir de uma mensagem recebida no WhatsApp.",
+        bairro: BAIRRO_NAO_INFORMADO,
+        isContact: true,
         whatsappLid: lid || undefined,
       },
     });

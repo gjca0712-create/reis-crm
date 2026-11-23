@@ -45,9 +45,10 @@ export async function recordSale(params: {
       })),
     });
 
+    // Comprou: se era contato do WhatsApp (Customer.isContact), passa a cliente.
     await tx.customer.update({
       where: { id: customerId },
-      data: { loyaltyPoints: { increment: pointsEarned } },
+      data: { loyaltyPoints: { increment: pointsEarned }, isContact: false },
     });
 
     await tx.loyaltyTransaction.create({

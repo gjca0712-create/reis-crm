@@ -5,6 +5,7 @@ import { redirect } from "next/navigation";
 import { prisma } from "@/lib/prisma";
 import { requireFeature } from "@/lib/session";
 import { normalizePhone } from "@/lib/phone";
+import { hasBairro } from "@/lib/customers/contact";
 
 function str(formData: FormData, key: string) {
   const v = formData.get(key);
@@ -73,6 +74,8 @@ export async function updateCustomer(customerId: string, formData: FormData) {
       name,
       phone,
       ...(phoneChanged ? { whatsappLid: null } : {}),
+      // Contato do WhatsApp com o cadastro completado vira cliente.
+      ...(hasBairro(bairro) ? { isContact: false } : {}),
       bairro,
       email: str(formData, "email") || null,
       document: str(formData, "document") || null,

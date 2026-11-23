@@ -67,6 +67,9 @@ import {
 import { transferConversationAs, transferToAgentAs } from "@/lib/whatsapp/transfer";
 import { refreshSupport } from "@/lib/whatsapp/live";
 import { logAudit } from "@/lib/audit";
+import { revalidatePath } from "next/cache";
+import { BAIRRO_NAO_INFORMADO, hasBairro } from "@/lib/customers/contact";
+import { FASE_OBRA_LABELS } from "@/lib/constants";
 
 // Conversa assumida por OUTRO atendente, ou transferida pra outro setor — a
 // tela já esconde, mas a action confere de novo: a tela do atendente só
@@ -589,11 +592,59 @@ export async function setConversationOutcome(conversationId: string, outcome: st
             },
             data: { quoteStatus: "VENDIDO", quoteClosedAt: now, followUpAt: null },
           }),
+          // Comprou: o contato do WhatsApp passa a cliente (o lembrete do
+          // cadastro continua até completarem nome e bairro).
+          prisma.customer.update({ where: { id: conversation.customerId }, data: { isContact: false } }),
         ]
       : []),
   ]);
 
   refreshSupport();
+  if (outcome === "VENDA") revalidatePath("/admin/clientes");
+  return {};
+}
+
+// --- Cadastro do contato sem sair da conversa ----------------------------------
+// "Dados do contato" (ContactInfo) e o lembrete na faixa do resultado
+// (OutcomePicker) mandam pra cá. Só os campos que vieram no formulário mudam
+// (o lembrete manda só nome e bairro). Com nome e bairro, o contato do
+// WhatsApp vira cliente. Quem pode: quem pode abrir a conversa.
+export async function saveContactDetails(conversationId: string, formData: FormData): Promise<ActionResult> {
+  const session = await requireFeature("whatsapp_suporte");
+  const target = await loadOutcomeTarget(session, conversationId);
+  if ("error" in target) return { error: target.error };
+  const customerId = target.conversation.customerId;
+
+  const field = (key: string) => {
+    const v = formData.get(key);
+    return typeof v === "string" ? v.trim() : null;
+  };
+  const name = field("name");
+  if (name !== null && !name) return { error: "Coloque o nome do cliente." };
+  const bairro = field("bairro");
+  const faseObra = field("faseObra");
+  if (faseObra && !(faseObra in FASE_OBRA_LABELS)) return { error: "Fase da obra inválida." };
+  const referredById = field("referredById");
+  if (referredById && !(await prisma.partner.findUnique({ where: { id: referredById }, select: { id: true } }))) {
+    return { error: "Esse indicador não existe mais." };
+  }
+  const notes = field("notes");
+
+  await prisma.customer.update({
+    where: { id: customerId },
+    data: {
+      ...(name !== null ? { name } : {}),
+      ...(bairro !== null ? { bairro: bairro || BAIRRO_NAO_INFORMADO } : {}),
+      ...(hasBairro(bairro) ? { isContact: false } : {}),
+      ...(faseObra !== null ? { faseObra: faseObra || null } : {}),
+      ...(referredById !== null ? { referredById: referredById || null } : {}),
+      ...(notes !== null ? { notes: notes || null } : {}),
+    },
+  });
+
+  refreshSupport();
+  revalidatePath("/admin/clientes");
+  revalidatePath(`/admin/clientes/${customerId}`);
   return {};
 }
 

@@ -1,6 +1,7 @@
 import { prisma } from "@/lib/prisma";
 import { formatPhone, onlyDigits } from "@/lib/format";
 import { normalizePhone, phoneVariants } from "@/lib/phone";
+import { BAIRRO_NAO_INFORMADO } from "@/lib/customers/contact";
 import { checkWhatsAppNumber, isSendablePhone } from "./client";
 import { findCustomerByPhone, withPhoneLock } from "./inbound";
 import { isWhatsAppLineId, whatsappLineLabel } from "./lines";
@@ -103,15 +104,16 @@ export async function startConversationAs(
     }
 
     // Só grava depois que a mensagem saiu — falhando, não fica cliente nem
-    // conversa vazia pra trás.
+    // conversa vazia pra trás. Número novo entra como contato (sem bairro),
+    // igual a quem escreve primeiro (lib/whatsapp/inbound.ts).
     const saved =
       customer ??
       (await prisma.customer.create({
         data: {
           name: input.name?.trim() || formatPhone(phone),
           phone,
-          bairro: "Não informado",
-          notes: "Cadastrado ao iniciar uma conversa pelo WhatsApp Suporte.",
+          bairro: BAIRRO_NAO_INFORMADO,
+          isContact: true,
         },
       }));
     // Conversa em aberto nessa linha (esperando na fila ou já com a pessoa)

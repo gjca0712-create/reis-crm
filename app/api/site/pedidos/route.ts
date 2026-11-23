@@ -3,7 +3,7 @@ import { revalidatePath } from "next/cache";
 import { prisma } from "@/lib/prisma";
 import { verifyApiKey, CORS_HEADERS } from "@/lib/apiAuth";
 import { recordSale, type SaleItemInput } from "@/lib/sales";
-import { normalizePhone } from "@/lib/phone";
+import { normalizePhone, phoneVariants } from "@/lib/phone";
 
 type ItemPayload = { productName?: unknown; quantity?: unknown; unitPrice?: unknown };
 
@@ -41,9 +41,16 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "items precisa ter ao menos 1 item válido" }, { status: 400, headers: CORS_HEADERS });
   }
 
-  let customer = await prisma.customer.findFirst({ where: { phone } });
+  let customer = await prisma.customer.findFirst({ where: { phone: { in: phoneVariants(phone) } }, orderBy: { createdAt: "asc" } });
   if (!customer) {
     customer = await prisma.customer.create({ data: { name, phone, bairro, email, address } });
+  } else if (customer.isContact) {
+    // Contato do WhatsApp sem cadastro: o pedido traz os dados que faltavam
+    // (a venda abaixo já o passa a cliente).
+    customer = await prisma.customer.update({
+      where: { id: customer.id },
+      data: { name, bairro, email: customer.email ?? email, address: customer.address ?? address },
+    });
   }
 
   const { sale } = await recordSale({ customerId: customer.id, items, notes: "Pedido feito pelo site" });
