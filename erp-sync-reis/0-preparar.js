@@ -8,10 +8,13 @@
 //
 //   node 0-preparar.js
 //
-// Pede um administrador do MySQL (root, ou o userdba do próprio Órbita) e a
-// senha dele, uma vez. Ela não aparece na tela, não vai pro .env e não fica
-// salva em lugar nenhum: só serve pra criar o usuário. Fora isso, nada no
-// banco do Órbita é alterado.
+// Pra criar o usuário, entra no MySQL com o mesmo acesso que o Órbita deste
+// computador usa (está na configuração dele). Se não der, pede um administrador
+// do MySQL (root, ou o userdba do próprio Órbita) e a senha dele, uma vez. Essa
+// senha não aparece na tela, não vai pro .env e não fica salva em lugar nenhum:
+// só serve pra criar o usuário. Fora isso, nada no banco do Órbita é alterado.
+// O MySQL pode estar em outro computador (rode antes o descobrir-banco.js): aí
+// o crm_leitura só entra a partir deste computador (ou da rede local dele).
 // Rodar de novo é seguro: troca a senha do crm_leitura e atualiza o .env (a
 // chave do CRM continua a mesma).
 const fs = require("fs");
@@ -23,8 +26,23 @@ const dotenv = require("dotenv");
 const ENV = path.join(__dirname, ".env");
 const EXEMPLO = path.join(__dirname, ".env.exemplo");
 const USUARIO = "crm_leitura";
-// O usuário só entra deste computador (o programa roda aqui mesmo).
+// MySQL neste computador: o usuário só entra daqui mesmo.
 const HOSTS = ["localhost", "127.0.0.1"];
+
+// MySQL em outro computador: o crm_leitura só entra do endereço com que este
+// computador chega lá (o MySQL diz qual é, em USER()). IP de rede interna vira
+// a faixa da rede (192.168.0.%), pra não quebrar quando o roteador troca o IP.
+function hostsDoCliente(user) {
+  const cliente = String(user || "").split("@").pop().trim();
+  const ip = /^(\d+)\.(\d+)\.(\d+)\.(\d+)$/.exec(cliente);
+  if (ip) {
+    const [a, b] = [Number(ip[1]), Number(ip[2])];
+    const interna = a === 10 || (a === 172 && b >= 16 && b <= 31) || (a === 192 && b === 168);
+    return [interna ? `${ip[1]}.${ip[2]}.${ip[3]}.%` : cliente];
+  }
+  if (!/^[A-Za-z0-9_.:-]+$/.test(cliente)) throw new Error(`O MySQL informou um endereço estranho pra este computador: ${cliente}. Nada foi feito.`);
+  return [cliente];
+}
 
 // Uma entrada só pra todas as perguntas (linhas digitadas antes da hora não se
 // perdem). Pergunta oculta: nada do que é digitado aparece na tela.
@@ -59,9 +77,9 @@ function sintaxeNova(versao) {
 }
 
 // Comandos (com ? no lugar da senha) pra criar/atualizar o usuário só de leitura.
-function comandosUsuario(versao, banco) {
+function comandosUsuario(versao, banco, hosts = HOSTS) {
   const comandos = [];
-  for (const host of HOSTS) {
+  for (const host of hosts) {
     const u = `'${USUARIO}'@'${host}'`;
     if (sintaxeNova(versao)) {
       comandos.push({ sql: `CREATE USER IF NOT EXISTS ${u} IDENTIFIED BY ?`, senha: true });
@@ -107,44 +125,67 @@ async function main() {
   const host = (atual.MYSQL_HOST || "127.0.0.1").trim();
   const port = Number(atual.MYSQL_PORT || 3306);
   const banco = (atual.MYSQL_BANCO || "orbitadb").trim();
-  if (!["127.0.0.1", "localhost"].includes(host)) {
-    throw new Error(`MYSQL_HOST no .env é ${host}: rode este programa no próprio computador do MySQL (127.0.0.1).`);
-  }
   if (!/^[A-Za-z0-9_]+$/.test(banco)) throw new Error(`MYSQL_BANCO inválido no .env: ${banco}`);
+  const local = ["127.0.0.1", "localhost", "::1"].includes(host.toLowerCase());
 
   console.log(`MySQL em ${host}:${port}, banco ${banco}.`);
-  const entrada = abrirEntrada();
+  let conexao = null;
   let admin;
-  let senhaAdmin;
-  try {
-    // O Órbita conecta com o userdba: usuário e senha ficam no user.config do
-    // Adm.exe (ver LEIA-ME.md, passo 3).
-    admin = (await entrada.perguntar("Usuário administrador do MySQL (root ou userdba) [root]: ")).trim() || "root";
-    senhaAdmin = await entrada.perguntar(`Senha do ${admin} do MySQL (não aparece enquanto digita): `, { oculto: true });
-  } finally {
-    entrada.fechar();
+
+  // 1º: o mesmo acesso que o Órbita deste computador usa (sem digitar senha).
+  // Com --perguntar, pula isso e pede o administrador (ex.: o root).
+  if (!process.argv.includes("--perguntar")) try {
+    const descobrir = require("./descobrir-banco");
+    const acessos = descobrir.montarAcessos(descobrir.acharConfiguracoes().achados);
+    const servidor = { host, port };
+    const r = await descobrir.entrarComAcessoDoOrbita(servidor, descobrir.credenciaisPara(acessos, servidor));
+    if (r.conexao) {
+      conexao = r.conexao;
+      admin = r.usuario;
+      console.log(`Entrei com o acesso do próprio Órbita (usuário ${admin}).`);
+    }
+  } catch {
+    // Sem configuração do Órbita legível: pergunta abaixo.
   }
 
-  let conexao;
-  try {
-    conexao = await mysql.createConnection({ host, port, user: admin, password: senhaAdmin });
-  } catch (err) {
-    if (err.code === "ER_ACCESS_DENIED_ERROR") throw new Error(`O MySQL recusou a senha do ${admin}. Nada foi feito.`);
-    if (err.code === "ECONNREFUSED") throw new Error(`MySQL não respondeu em ${host}:${port} — o Órbita/MySQL está ligado? Nada foi feito.`);
-    throw err;
+  // 2º: pergunta um administrador.
+  if (!conexao) {
+    const entrada = abrirEntrada();
+    let senhaAdmin;
+    try {
+      // O Órbita conecta com o userdba: usuário e senha ficam no user.config do
+      // Adm.exe (ver LEIA-ME.md, passo 3).
+      admin = (await entrada.perguntar("Usuário administrador do MySQL (root ou userdba) [root]: ")).trim() || "root";
+      senhaAdmin = await entrada.perguntar(`Senha do ${admin} do MySQL (não aparece enquanto digita): `, { oculto: true });
+    } finally {
+      entrada.fechar();
+    }
+    try {
+      conexao = await mysql.createConnection({ host, port, user: admin, password: senhaAdmin, connectTimeout: 15_000 });
+    } catch (err) {
+      if (err.code === "ER_ACCESS_DENIED_ERROR") throw new Error(`O MySQL recusou a senha do ${admin}. Nada foi feito.`);
+      if (["ECONNREFUSED", "ETIMEDOUT", "EHOSTUNREACH", "ENOTFOUND"].includes(err.code)) {
+        throw new Error(`MySQL não respondeu em ${host}:${port} — o Órbita/MySQL está ligado? Nada foi feito.`);
+      }
+      throw err;
+    }
   }
+
   const senha = senhaAleatoria();
   try {
-    const [[{ versao }]] = await conexao.query("SELECT VERSION() AS versao");
+    const [[{ versao, eu }]] = await conexao.query("SELECT VERSION() AS versao, USER() AS eu");
+    const hosts = local ? HOSTS : hostsDoCliente(eu);
+    if (!local) console.log(`O crm_leitura vai entrar só a partir de ${hosts.join(", ")} (este computador).`);
     const [bancos] = await conexao.query("SHOW DATABASES LIKE ?", [banco]);
     if (!bancos.length) throw new Error(`O banco ${banco} não existe neste MySQL. Confira MYSQL_BANCO no .env. Nada foi feito.`);
-    for (const c of comandosUsuario(versao, banco)) {
+    for (const c of comandosUsuario(versao, banco, hosts)) {
       try {
         await conexao.query(c.sql, c.senha ? [senha] : []);
       } catch (err) {
         if (/ACCESS_DENIED/.test(err.code || "")) {
           throw new Error(
-            `O ${admin} não tem permissão pra criar usuário no MySQL (${err.code}). Rode de novo com o root, ` +
+            `O ${admin} não tem permissão pra criar usuário no MySQL (${err.code}). ` +
+              "Rode de novo com node 0-preparar.js --perguntar e use o root, " +
               "ou peça ao suporte do Órbita pra rodar o criar-usuario-leitura.sql."
           );
         }
@@ -204,4 +245,4 @@ if (require.main === module) {
   });
 }
 
-module.exports = { abrirEntrada, sintaxeNova, comandosUsuario, definirNoEnv, senhaAleatoria };
+module.exports = { abrirEntrada, sintaxeNova, comandosUsuario, hostsDoCliente, definirNoEnv, senhaAleatoria };

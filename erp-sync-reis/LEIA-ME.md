@@ -17,8 +17,9 @@ pagamentos, custo da época), contas a receber e contas a pagar. As telas
 
 ## O que precisa
 
-- O computador onde fica o **MySQL do Órbita** (o "servidor" da loja), ligado
-  durante o expediente.
+- Um computador com o **Órbita instalado e mostrando as vendas de hoje**,
+  ligado durante o expediente. O banco (MySQL) do Órbita pode estar nele ou em
+  outro computador: o `descobrir-banco.js` acha onde está.
 - **Windows 10 ou mais novo** (o Node 20 não instala no Windows 7 nem no 8).
 - **Node.js 20 ou mais novo**: baixe a versão LTS em https://nodejs.org e
   instale com as opções padrão. Depois de instalar, feche e abra de novo o
@@ -39,14 +40,25 @@ pagamentos, custo da época), contas a receber e contas a pagar. As telas
    npm install
    ```
 
-3. **Prepare o banco e o `.env`.**
+3. **Descubra onde o Órbita guarda os dados e prepare o `.env`.**
 
    ```bat
+   node descobrir-banco.js
    node 0-preparar.js
    ```
 
-   Ele pede um **usuário administrador do MySQL** e a senha dele, uma vez. A
-   senha não aparece enquanto você digita e não fica salva em lugar nenhum.
+   O `descobrir-banco.js` lê a configuração do próprio Órbita deste computador
+   (pasta do programa e perfil de cada usuário do Windows), entra no MySQL para
+   onde ela aponta (neste computador ou em outro da rede) e mostra a **última
+   venda de cada banco**. O banco com a venda mais recente vai pro `.env`. Se
+   nenhum tiver venda da última semana, ele não muda nada e avisa: aí rode o
+   mesmo comando num computador onde o Órbita mostra as vendas de hoje.
+
+   O `0-preparar.js` entra no MySQL com o mesmo acesso do Órbita, sem pedir
+   senha. Se não conseguir, pede um **usuário administrador do MySQL** e a
+   senha dele, uma vez (para forçar a pergunta: `node 0-preparar.js
+   --perguntar`). A senha não aparece enquanto você digita e não fica salva em
+   lugar nenhum.
 
    Sem a senha do `root`, use o usuário com que o próprio Órbita entra no
    banco, o `userdba`. O usuário e a senha dele ficam no arquivo `user.config`
@@ -57,7 +69,8 @@ pagamentos, custo da época), contas a receber e contas a pagar. As telas
    Com o usuário e a senha, o programa:
 
    - cria o usuário `crm_leitura`, que só consegue consultar, com uma senha
-     aleatória;
+     aleatória. Com o MySQL em outro computador, esse usuário só entra a partir
+     da rede interna deste computador;
    - cria o `.env` já preenchido com esse usuário;
    - gera a chave do CRM e mostra na tela. Copie essa chave, que vai no passo 5.
 
@@ -153,7 +166,8 @@ pagamentos, custo da época), contas a receber e contas a pagar. As telas
 
 | Mensagem no log | O que fazer |
 | --- | --- |
-| `MySQL não respondeu` | O MySQL/Órbita está ligado neste computador? Confira `MYSQL_HOST` e `MYSQL_PORT`. |
+| Conferência com **0 vendas nos últimos 30 dias** | O `.env` aponta pra um banco velho. Rode `node descobrir-banco.js` e depois `node 0-preparar.js`. |
+| `MySQL não respondeu` | O MySQL/Órbita está ligado? Confira `MYSQL_HOST` e `MYSQL_PORT`, ou rode `node descobrir-banco.js`. |
 | `MySQL recusou usuário/senha` | Rode `node 0-preparar.js` de novo (passo 3): ele refaz o usuário e o `.env`. |
 | `CRM recusou a chave (401)` | A `ERP_SYNC_KEY` do `.env` tem que ser exatamente a mesma do Railway. |
 | `Sem conexão com o CRM` | Sem internet. Não precisa fazer nada: a próxima rodada manda. |
@@ -166,7 +180,8 @@ pagamentos, custo da época), contas a receber e contas a pagar. As telas
 
 | Comando | O que faz |
 | --- | --- |
-| `node 0-preparar.js` | Cria (ou refaz) o usuário só de leitura e o `.env`. Pede a senha do root ou do userdba. |
+| `node descobrir-banco.js` | Acha o MySQL e o banco que o Órbita usa (última venda de cada um) e aponta o `.env` pra ele. Só lê. |
+| `node 0-preparar.js` | Cria (ou refaz) o usuário só de leitura e o `.env`. Usa o acesso do Órbita; com `--perguntar`, pede a senha do root ou do userdba. |
 | `node 1-conferir-banco.js` | Confere o banco (só leitura, só contagens). |
 | `node 2-sincronizar.js --simular` | Mostra o que mandaria, sem mandar. |
 | `node 2-sincronizar.js` | Um envio agora, na mão. |
@@ -179,5 +194,6 @@ pagamentos, custo da época), contas a receber e contas a pagar. As telas
   não o copie para outros computadores.
 - Use só o usuário `crm_leitura`, nunca o `root`. A conferência (passo 4) avisa
   se o usuário puder gravar.
-- Não abra a porta 3306 do MySQL para a internet. O programa roda no mesmo
-  computador do banco e não precisa disso.
+- Não abra a porta 3306 do MySQL para a internet. O programa só precisa
+  chegar no MySQL pelo mesmo caminho que o Órbita já usa (o próprio
+  computador ou a rede interna da loja).
