@@ -8,21 +8,46 @@ import {
   formatDuration,
   loadSupportMetrics,
   parseMetricsPeriod,
+  parseStoreDay,
+  periodStart,
+  storeDayKey,
+  storeDayRange,
 } from "@/lib/whatsapp/metrics";
 import { Card } from "@/components/ui/Card";
 import { StatTile } from "@/components/ui/StatTile";
+import { OutcomeDayFilter } from "@/components/whatsapp/OutcomeDayFilter";
 import { OutcomeReport } from "@/components/whatsapp/OutcomeReport";
 import { loadOutcomeReport } from "@/lib/whatsapp/outcome-report";
+
+// "2026-11-21" → "sexta-feira, 21/11". Meio-dia UTC + timeZone UTC: o dia não
+// escorrega por fuso.
+const dayTitleFormat = new Intl.DateTimeFormat("pt-BR", {
+  weekday: "long",
+  day: "2-digit",
+  month: "2-digit",
+  timeZone: "UTC",
+});
+function dayTitle(day: string) {
+  return dayTitleFormat.format(new Date(`${day}T12:00:00Z`));
+}
 
 export default async function MetricasAtendimentoPage({
   searchParams,
 }: {
-  searchParams: Promise<{ periodo?: string }>;
+  searchParams: Promise<{ periodo?: string; dia?: string }>;
 }) {
   await requireFeature("whatsapp_gestao");
-  const period = parseMetricsPeriod((await searchParams).periodo);
+  const sp = await searchParams;
+  const period = parseMetricsPeriod(sp.periodo);
   const now = new Date();
-  const [m, outcomes] = await Promise.all([loadSupportMetrics(period, now), loadOutcomeReport(period, now)]);
+  // Filtro de dia: só na seção "Resultado dos atendimentos".
+  const day = parseStoreDay(sp.dia, now);
+  const today = storeDayKey(now);
+  const yesterday = storeDayKey(new Date(now.getTime() - 86_400_000));
+  const [m, outcomes] = await Promise.all([
+    loadSupportMetrics(period, now),
+    loadOutcomeReport(day ? storeDayRange(day) : { start: periodStart(period, now) }, now),
+  ]);
   const maxServed = Math.max(...m.agents.map((a) => a.conversations), 1);
 
   return (
@@ -106,8 +131,18 @@ export default async function MetricasAtendimentoPage({
       </section>
 
       <section className="space-y-2">
-        <h2 className="text-xs font-medium uppercase tracking-wide text-ink-muted">Resultado dos atendimentos</h2>
-        <OutcomeReport report={outcomes} singleDay={period === "hoje"} />
+        <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2">
+          <h2 className="text-xs font-medium uppercase tracking-wide text-ink-muted">
+            Resultado dos atendimentos
+            {day && <span className="normal-case text-ink-secondary"> · {dayTitle(day)}</span>}
+          </h2>
+          <OutcomeDayFilter period={period} day={day} today={today} yesterday={yesterday} />
+        </div>
+        <OutcomeReport
+          report={outcomes}
+          singleDay={day !== null || period === "hoje"}
+          scope={day ? "no dia" : "no período"}
+        />
       </section>
 
       <Card className="p-0 overflow-hidden">

@@ -112,7 +112,16 @@ const tooltipStyle = {
   cursor: { fill: "rgba(247,243,234,0.05)" },
 };
 
-export function OutcomeReport({ report, singleDay }: { report: Report; singleDay: boolean }) {
+// scope: "no período" (os botões do topo) ou "no dia" (filtro de dia da seção).
+export function OutcomeReport({
+  report,
+  singleDay,
+  scope = "no período",
+}: {
+  report: Report;
+  singleDay: boolean;
+  scope?: string;
+}) {
   const { total, marked, unmarked, inProgress } = report;
   const summaryHover = useHoverTip();
   const agentHover = useHoverTip();
@@ -228,7 +237,7 @@ export function OutcomeReport({ report, singleDay }: { report: Report; singleDay
           </div>
         )}
         {nothing ? (
-          <p className="text-sm text-ink-muted">Nenhum atendimento aberto no período.</p>
+          <p className="text-sm text-ink-muted">Nenhum atendimento aberto {scope}.</p>
         ) : (
           !marked && (
             <p className="text-sm text-ink-muted">
@@ -239,7 +248,7 @@ export function OutcomeReport({ report, singleDay }: { report: Report; singleDay
         )}
       </div>
 
-      <QuoteFunnelCard quotes={report.quotes} />
+      <QuoteFunnelCard quotes={report.quotes} scope={scope} />
 
       <div className="rounded-2xl border border-border bg-surface overflow-hidden">
         <div className="px-5 pt-5 pb-4 flex flex-wrap items-end justify-between gap-x-4 gap-y-2">
@@ -335,7 +344,7 @@ export function OutcomeReport({ report, singleDay }: { report: Report; singleDay
               {report.agents.length === 0 && (
                 <tr>
                   <td colSpan={9} className="py-8 text-center text-ink-muted">
-                    Nenhum atendimento com atendente no período.
+                    Nenhum atendimento com atendente {scope}.
                   </td>
                 </tr>
               )}
@@ -351,7 +360,7 @@ export function OutcomeReport({ report, singleDay }: { report: Report; singleDay
 // Orçamento → venda: quantos orçamentos do período já viraram venda, quantos
 // estão em aberto (com retorno marcado na aba Retornos) e por que os outros
 // não fecharam.
-function QuoteFunnelCard({ quotes }: { quotes: QuoteFunnel }) {
+function QuoteFunnelCard({ quotes, scope }: { quotes: QuoteFunnel; scope: string }) {
   const hover = useHoverTip();
   const maxReason = Math.max(...quotes.lostReasons.map((r) => r.count), 1);
   const cell = (label: string, value: number, hint: React.ReactNode, color?: string) => (
@@ -369,12 +378,12 @@ function QuoteFunnelCard({ quotes }: { quotes: QuoteFunnel }) {
       <div className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1">
         <h3 className="text-sm font-semibold text-ink-primary">Orçamentos que viraram venda</h3>
         <span className="text-xs text-ink-muted">
-          {quotes.made} orçamento{quotes.made === 1 ? "" : "s"} no período
+          {quotes.made} orçamento{quotes.made === 1 ? "" : "s"} {scope}
         </span>
       </div>
       {quotes.made === 0 ? (
         <p className="text-sm text-ink-muted">
-          Nenhum orçamento no período. Ao marcar Orçamento na conversa, o retorno pro cliente aparece na aba Retornos do
+          Nenhum orçamento {scope}. Ao marcar Orçamento na conversa, o retorno pro cliente aparece na aba Retornos do
           Suporte.
         </p>
       ) : (

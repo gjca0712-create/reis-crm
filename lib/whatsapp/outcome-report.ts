@@ -1,5 +1,5 @@
 import { prisma } from "@/lib/prisma";
-import { periodStart, storeDayKey, type MetricsPeriod } from "./metrics";
+import { storeDayKey } from "./metrics";
 import {
   QUOTE_LOST_REASONS,
   emptyOutcomeCounts,
@@ -56,10 +56,15 @@ export type OutcomeReport = {
   agents: AgentOutcomes[];
 };
 
-export async function loadOutcomeReport(period: MetricsPeriod, now = new Date()): Promise<OutcomeReport> {
-  const start = periodStart(period, now);
+// range: o período da tela (start até agora) ou um dia só (start/end do
+// storeDayRange, com o filtro de dia da seção).
+export async function loadOutcomeReport(
+  range: { start: Date; end?: Date },
+  now = new Date()
+): Promise<OutcomeReport> {
+  const { start, end } = range;
   const conversations = await prisma.conversation.findMany({
-    where: { createdAt: { gte: start } },
+    where: { createdAt: end ? { gte: start, lt: end } : { gte: start } },
     select: {
       status: true,
       outcome: true,
@@ -75,7 +80,8 @@ export async function loadOutcomeReport(period: MetricsPeriod, now = new Date())
   });
 
   const days = new Map<string, OutcomeCounts>();
-  for (let t = start.getTime(); t <= now.getTime(); t += 86_400_000) days.set(storeDayKey(new Date(t)), emptyOutcomeCounts());
+  const last = Math.min(end ? end.getTime() - 1 : Infinity, now.getTime());
+  for (let t = start.getTime(); t <= last; t += 86_400_000) days.set(storeDayKey(new Date(t)), emptyOutcomeCounts());
   const today = storeDayKey(now);
 
   const total = emptyOutcomeCounts();

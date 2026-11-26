@@ -39,6 +39,23 @@ export function periodStart(period: MetricsPeriod, now: Date): Date {
   return midnight(1);
 }
 
+// "?dia=AAAA-MM-DD" do filtro de um dia só: vale se for uma data de verdade,
+// de 2020 até hoje (fuso da loja). Qualquer outra coisa vira null.
+export function parseStoreDay(value: string | undefined, now: Date): string | null {
+  if (!value || !/^\d{4}-\d{2}-\d{2}$/.test(value)) return null;
+  if (value < "2020-01-01" || value > storeDayKey(now)) return null;
+  const [y, m, d] = value.split("-").map(Number);
+  const start = new Date(Date.UTC(y, m - 1, d, 3));
+  return storeDayKey(start) === value ? value : null;
+}
+
+// Da meia-noite do dia até a meia-noite seguinte (fuso da loja).
+export function storeDayRange(day: string): { start: Date; end: Date } {
+  const [y, m, d] = day.split("-").map(Number);
+  const start = new Date(Date.UTC(y, m - 1, d, 3));
+  return { start, end: new Date(start.getTime() + 86_400_000) };
+}
+
 // --- Tempo de resposta ----------------------------------------------------------
 
 export type MetricMessage = {
