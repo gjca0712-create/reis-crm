@@ -70,6 +70,7 @@ function registrar(etapa: string, r: { lidos: number; gravados: number; recusado
 
 // Uma passada. Exportada pro teste; quem chama garante que não roda duas ao mesmo tempo.
 export async function rodadaAlpha(client: AlphaClient, agora = Date.now()): Promise<void> {
+  if (agora < pausaSemBanco.ate) return;
   const estado = await lerEstado();
   if (estado.pausaAte && agora < estado.pausaAte) return;
   const salvar = async (mudancas: Partial<EstadoAlpha>) => {
@@ -153,13 +154,27 @@ export async function rodadaAlpha(client: AlphaClient, agora = Date.now()): Prom
       await salvar({ conferenciaEm: agora, contasEm: agora });
     }
   } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
+    const msg = umaLinha(err);
     const pausaAte = agora + (err instanceof AlphaError && err.esperarMs ? err.esperarMs : 5 * 60_000);
-    console.error(`[alpha] ${msg} Tenta de novo às ${new Date(pausaAte).toISOString()}.`);
+    console.error(`[alpha] erro: ${msg} Tenta de novo às ${new Date(pausaAte).toISOString()}.`);
     estado.pausaAte = pausaAte;
     estado.ultimoErro = msg;
-    await gravarEstado(estado).catch(() => {});
+    // Se nem o estado grava (problema no banco), a pausa fica na memória — senão
+    // a próxima passada, 15 s depois, tentaria tudo de novo.
+    await gravarEstado(estado).catch((e) => {
+      pausaSemBanco.ate = pausaAte;
+      console.error(`[alpha] erro ao gravar o estado: ${umaLinha(e)}`);
+    });
   }
+}
+
+const pausaSemBanco = { ate: 0 };
+
+// Erro do Prisma vem em várias linhas (começa com quebra de linha); no log do
+// Railway cada linha vira uma entrada, e a busca por "[alpha]" só achava a primeira, vazia.
+function umaLinha(err: unknown): string {
+  const texto = err instanceof Error ? err.message : String(err);
+  return texto.replace(/\s+/g, " ").trim().slice(0, 600);
 }
 
 const globalAlpha = globalThis as unknown as { __alphaImport?: boolean };
@@ -185,7 +200,7 @@ export function startAlphaImport(): void {
     try {
       await rodadaAlpha(client);
     } catch (err) {
-      console.error("[alpha] falha inesperada:", err);
+      console.error(`[alpha] falha inesperada: ${umaLinha(err)}`);
     } finally {
       rodando = false;
     }
