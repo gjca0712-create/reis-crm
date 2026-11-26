@@ -10,13 +10,14 @@ import { Badge } from "@/components/ui/Badge";
 import { RevenueTrendChart } from "@/components/dashboard/RevenueTrendChart";
 import { BairroRanking } from "@/components/dashboard/BairroRanking";
 import { requireFeature } from "@/lib/session";
+import { lastPurchaseDate, lastWhatsappSales } from "@/lib/customers/purchases";
 
 export default async function DashboardPage() {
   await requireFeature("dashboard");
 
   const since30 = startOfDayNDaysAgo(29);
 
-  const [sales30, allCustomers, topPartners, recentSales] = await Promise.all([
+  const [sales30, allCustomers, topPartners, recentSales, whatsappSales] = await Promise.all([
     prisma.sale.findMany({
       where: { date: { gte: since30 } },
       select: { total: true, cashbackAmount: true, pointsEarned: true, date: true, customer: { select: { bairro: true } } },
@@ -33,6 +34,8 @@ export default async function DashboardPage() {
       take: 8,
       include: { customer: { select: { name: true, bairro: true } }, partner: { select: { name: true } } },
     }),
+    // Recência conta também a venda marcada no WhatsApp (lib/customers/purchases.ts).
+    lastWhatsappSales(),
   ]);
 
   const receita30 = sales30.reduce((sum, s) => sum + s.total, 0);
@@ -41,7 +44,7 @@ export default async function DashboardPage() {
 
   const bucketCounts: Record<RecencyBucket, number> = { "30": 0, "60": 0, "90": 0, inativo: 0, "sem-compra": 0 };
   for (const c of allCustomers) {
-    bucketCounts[recencyBucket(c.sales[0]?.date ?? null)]++;
+    bucketCounts[recencyBucket(lastPurchaseDate(c.sales[0]?.date, whatsappSales.get(c.id)))]++;
   }
 
   const dailyMap = new Map<string, number>();

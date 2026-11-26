@@ -6,6 +6,7 @@ import { formatDate, formatPhone, whatsappLink } from "@/lib/format";
 import { recencyBucket, daysUntilBirthday, RECENCY_LABELS, RECENCY_STATUS, type RecencyBucket } from "@/lib/calculations";
 import { FASE_OBRA_LABELS, type FaseObra } from "@/lib/constants";
 import { BAIRRO_NAO_INFORMADO } from "@/lib/customers/contact";
+import { lastPurchaseDate, lastWhatsappSales, whatsappSaleWhere } from "@/lib/customers/purchases";
 import { outcomeInfo } from "@/lib/whatsapp/outcome";
 import { Card } from "@/components/ui/Card";
 import { Badge } from "@/components/ui/Badge";
@@ -19,20 +20,29 @@ type Params = { q?: string; bairro?: string; recencia?: string; fase?: string; t
 
 // Recência pela data da última compra, igual ao recencyBucket (dias inteiros:
 // "até 30 dias" = comprou há menos de 31 dias), mas no banco — a lista é
-// paginada, então o filtro não pode ser feito depois de carregar.
+// paginada, então o filtro não pode ser feito depois de carregar. Compra =
+// venda lançada no CRM ou atendimento do WhatsApp marcado Venda.
 function recencyWhere(bucket: RecencyBucket | "", now: Date): Prisma.CustomerWhereInput {
-  const after = (days: number) => ({ date: { gt: new Date(now.getTime() - (days + 1) * DAY_MS) } });
+  const since = (days?: number) => (days === undefined ? undefined : new Date(now.getTime() - (days + 1) * DAY_MS));
+  const bought = (days?: number): Prisma.CustomerWhereInput => {
+    const s = since(days);
+    return { OR: [{ sales: { some: s ? { date: { gt: s } } : {} } }, { conversations: { some: whatsappSaleWhere(s) } }] };
+  };
+  const notBought = (days?: number): Prisma.CustomerWhereInput => {
+    const s = since(days);
+    return { AND: [{ sales: { none: s ? { date: { gt: s } } : {} } }, { conversations: { none: whatsappSaleWhere(s) } }] };
+  };
   switch (bucket) {
     case "30":
-      return { sales: { some: after(30) } };
+      return bought(30);
     case "60":
-      return { AND: [{ sales: { some: after(60) } }, { sales: { none: after(30) } }] };
+      return { AND: [bought(60), notBought(30)] };
     case "90":
-      return { AND: [{ sales: { some: after(90) } }, { sales: { none: after(60) } }] };
+      return { AND: [bought(90), notBought(60)] };
     case "inativo":
-      return { AND: [{ sales: { some: {} } }, { sales: { none: after(90) } }] };
+      return { AND: [bought(), notBought(90)] };
     case "sem-compra":
-      return { sales: { none: {} } };
+      return notBought();
     default:
       return {};
   }
@@ -87,6 +97,7 @@ export default async function ClientesPage({ searchParams }: { searchParams: Pro
         }),
   ]);
 
+  const whatsappSales = contacts ? new Map<string, Date>() : await lastWhatsappSales(customers.map((c) => c.id));
   const pages = Math.max(1, Math.ceil(total / PAGE_SIZE));
   const hasFilters = Boolean(q || bairroFilter || recenciaFilter || faseFilter);
   const query = (overrides: Partial<Params>) => {
@@ -290,7 +301,7 @@ export default async function ClientesPage({ searchParams }: { searchParams: Pro
               </thead>
               <tbody>
                 {customers.map((c) => {
-                  const bucket = recencyBucket(c.sales[0]?.date ?? null);
+                  const bucket = recencyBucket(lastPurchaseDate(c.sales[0]?.date, whatsappSales.get(c.id)));
                   const birthdayDays = daysUntilBirthday(c.birthday);
                   const birthdaySoon = birthdayDays !== null && birthdayDays <= 7;
                   return (

@@ -1,5 +1,6 @@
 import { prisma } from "./prisma";
 import { recencyBucket } from "./calculations";
+import { lastPurchaseDate, lastWhatsappSales } from "./customers/purchases";
 
 export const SEGMENTS = [
   { value: "todos", label: "Todos os clientes" },
@@ -21,8 +22,10 @@ export async function getSegmentCustomers(segmentType: string): Promise<Campaign
 
   if (segmentType === "todos") return customers;
 
+  // Recência conta também a venda marcada no WhatsApp (lib/customers/purchases.ts).
+  const whatsappSales = await lastWhatsappSales();
   return customers.filter((c) => {
-    const bucket = recencyBucket(c.sales[0]?.date ?? null);
+    const bucket = recencyBucket(lastPurchaseDate(c.sales[0]?.date, whatsappSales.get(c.id)));
     if (segmentType === "recencia-30") return bucket === "30";
     if (segmentType === "recencia-60") return bucket === "60";
     if (segmentType === "recencia-90") return bucket === "90";

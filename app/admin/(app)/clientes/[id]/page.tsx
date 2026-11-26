@@ -14,7 +14,9 @@ import {
   UserPlus,
   type LucideIcon,
 } from "lucide-react";
+import type { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
+import { whatsappSaleDate, whatsappSaleWhere } from "@/lib/customers/purchases";
 import { formatCurrency, formatDate, formatBirthday, formatPhone, whatsappLink } from "@/lib/format";
 import { recencyBucket, daysUntilBirthday, RECENCY_LABELS, RECENCY_STATUS } from "@/lib/calculations";
 import { PROFISSAO_LABELS, FASE_OBRA_LABELS } from "@/lib/constants";
@@ -28,12 +30,26 @@ import { whatsappLineLabel } from "@/lib/whatsapp/lines";
 // Atendimentos do WhatsApp mostrados na ficha (os mais recentes).
 const CONVERSATIONS_SHOWN = 15;
 
+// Histórico de compras: as vendas lançadas no CRM e os atendimentos do
+// WhatsApp marcados Venda (lib/customers/purchases.ts), do mais novo pro mais antigo.
+type Purchase =
+  | {
+      kind: "crm";
+      date: Date;
+      sale: Prisma.SaleGetPayload<{ include: { partner: { select: { name: true } }; items: true } }>;
+    }
+  | {
+      kind: "whatsapp";
+      date: Date;
+      conversation: { id: string; number: number; outcomeAgent: { name: string } | null; value: number };
+    };
+
 export default async function ClienteDetailPage({ params }: { params: Promise<{ id: string }> }) {
   const session = await requireFeature("clientes");
   const { id } = await params;
   const canChat = canAccess(await getSessionFeatures(session), "whatsapp_suporte");
 
-  const customer = await prisma.customer.findUnique({
+  const customerQuery = prisma.customer.findUnique({
     where: { id },
     include: {
       referredBy: true,
@@ -59,12 +75,43 @@ export default async function ClienteDetailPage({ params }: { params: Promise<{ 
       _count: { select: { conversations: true } },
     },
   });
+  // Compras pelo WhatsApp (conversas marcadas Venda), todas — não só as 15
+  // conversas mais recentes da lista de atendimentos.
+  const whatsappSalesQuery = prisma.conversation.findMany({
+    where: { customerId: id, ...whatsappSaleWhere() },
+    select: {
+      id: true,
+      number: true,
+      createdAt: true,
+      outcomeAt: true,
+      outcomeValue: true,
+      outcomeAgent: { select: { name: true } },
+    },
+  });
+  const [customer, whatsappSales] = await Promise.all([customerQuery, whatsappSalesQuery]);
 
   if (!customer) notFound();
   const now = new Date();
 
-  const bucket = recencyBucket(customer.sales[0]?.date ?? null);
-  const totalGasto = customer.sales.reduce((sum, s) => sum + s.total, 0);
+  const purchases: Purchase[] = [
+    ...customer.sales.map((sale) => ({ kind: "crm" as const, date: sale.date, sale })),
+    ...whatsappSales.map((c) => ({
+      kind: "whatsapp" as const,
+      date: whatsappSaleDate(c),
+      conversation: { ...c, value: c.outcomeValue === null ? 0 : Number(c.outcomeValue) },
+    })),
+  ].sort((a, b) => b.date.getTime() - a.date.getTime());
+  const bucket = recencyBucket(purchases[0]?.date ?? null);
+  const totalGasto = purchases.reduce(
+    (sum, p) => sum + (p.kind === "crm" ? p.sale.total : p.conversation.value),
+    0
+  );
+  const purchasesHint =
+    whatsappSales.length === 0
+      ? `${purchases.length} compra${purchases.length === 1 ? "" : "s"}`
+      : whatsappSales.length === purchases.length
+        ? `${purchases.length} compra${purchases.length === 1 ? "" : "s"} pelo WhatsApp`
+        : `${purchases.length} compras · ${whatsappSales.length} pelo WhatsApp`;
   const waMessage = `Olá ${customer.name.split(" ")[0]}, aqui é da Reis Materiais de Construção!`;
   const birthdayDays = daysUntilBirthday(customer.birthday);
 
@@ -169,9 +216,7 @@ export default async function ClienteDetailPage({ params }: { params: Promise<{ 
           <Card>
             <div className="text-ink-secondary text-sm mb-1">Total gasto</div>
             <div className="text-2xl font-semibold text-ink-primary">{formatCurrency(totalGasto)}</div>
-            <div className="text-xs text-ink-muted mt-1">
-              {customer.sales.length} compra{customer.sales.length === 1 ? "" : "s"}
-            </div>
+            <div className="text-xs text-ink-muted mt-1">{purchasesHint}</div>
           </Card>
         </div>
       </div>
@@ -246,11 +291,44 @@ export default async function ClienteDetailPage({ params }: { params: Promise<{ 
       </Card>
 
       <Card title="Histórico de compras">
-        {customer.sales.length === 0 ? (
+        {purchases.length === 0 ? (
           <p className="text-sm text-ink-muted">Nenhuma compra registrada ainda.</p>
         ) : (
           <div className="space-y-5">
-            {customer.sales.map((s) => (
+            {purchases.map((p) => {
+              if (p.kind === "whatsapp") {
+                const c = p.conversation;
+                return (
+                  <div
+                    key={`wa-${c.id}`}
+                    className="flex items-center justify-between flex-wrap gap-2 border-b border-border/60 last:border-0 pb-5 last:pb-0"
+                  >
+                    <div className="text-sm">
+                      <span className="text-ink-primary font-medium">{formatDate(p.date)}</span>
+                      <span className="text-ink-muted">
+                        {" "}
+                        · <MessageCircle className="inline w-3.5 h-3.5 -mt-0.5 text-status-good" aria-hidden /> pelo
+                        WhatsApp · atendimento #{c.number}
+                        {c.outcomeAgent && ` · ${c.outcomeAgent.name}`}
+                      </span>
+                    </div>
+                    <div className="flex items-center gap-3 text-sm">
+                      {c.value > 0 ? (
+                        <span className="font-semibold text-ink-primary tabular-nums">{formatCurrency(c.value)}</span>
+                      ) : (
+                        <span className="text-ink-muted">sem valor marcado</span>
+                      )}
+                      {canChat && (
+                        <Link href={`/admin/whatsapp/suporte?c=${c.id}`} className="text-gold-400 hover:text-gold-300">
+                          Abrir
+                        </Link>
+                      )}
+                    </div>
+                  </div>
+                );
+              }
+              const s = p.sale;
+              return (
               <div key={s.id} className="border-b border-border/60 last:border-0 pb-5 last:pb-0">
                 <div className="flex items-center justify-between flex-wrap gap-2 mb-2">
                   <div className="text-sm">
@@ -276,7 +354,8 @@ export default async function ClienteDetailPage({ params }: { params: Promise<{ 
                 )}
                 {s.notes && <p className="text-xs text-ink-muted mt-1.5 italic">{s.notes}</p>}
               </div>
-            ))}
+              );
+            })}
           </div>
         )}
       </Card>
