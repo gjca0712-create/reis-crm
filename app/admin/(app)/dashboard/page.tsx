@@ -1,7 +1,7 @@
 import Link from "next/link";
 import { Wallet, Users, Gift, Percent } from "lucide-react";
 import { prisma } from "@/lib/prisma";
-import { formatCurrency, compactNumber, formatDate } from "@/lib/format";
+import { formatCurrency, compactNumber, formatDate, formatDateTime } from "@/lib/format";
 import { recencyBucket, RECENCY_LABELS, RECENCY_STATUS, type RecencyBucket } from "@/lib/calculations";
 import { dayKey, startOfDayNDaysAgo } from "@/lib/dates";
 import { StatTile } from "@/components/ui/StatTile";
@@ -9,11 +9,40 @@ import { Card } from "@/components/ui/Card";
 import { Badge } from "@/components/ui/Badge";
 import { RevenueTrendChart } from "@/components/dashboard/RevenueTrendChart";
 import { BairroRanking } from "@/components/dashboard/BairroRanking";
-import { requireFeature } from "@/lib/session";
+import { requireFeature, getSessionFeatures } from "@/lib/session";
+import { canAccess } from "@/lib/permissions";
 import { lastPurchaseDate, lastWhatsappSales } from "@/lib/customers/purchases";
+import { getErpDataStatus, revenueSeries, salesSummary } from "@/lib/erp/queries";
+import { periodKeys, resolvePeriod } from "@/lib/erp/period";
+
+// Faturamento da loja: com o ERP ligado (dados reais, não a demonstração), a
+// receita, o gráfico por dia e as últimas vendas vêm do ERP — as vendas
+// lançadas à mão no CRM ficam pro programa de indicadores (cashback, pontos,
+// bairros). Só pra quem também pode ver o Financeiro (números do ERP são de
+// CEO e Gerente, ver lib/permissions.ts).
+async function loadStoreSales() {
+  const period = resolvePeriod("30");
+  const [summary, series, recent] = await Promise.all([
+    salesSummary(period.start, period.end),
+    revenueSeries(period),
+    prisma.erpSale.findMany({
+      where: { cancelada: false, demo: false },
+      orderBy: { data: "desc" },
+      take: 8,
+      select: { id: true, data: true, total: true, vendedor: true, clienteNome: true },
+    }),
+  ]);
+  return {
+    summary,
+    trend: periodKeys(period).map((date) => ({ date, value: series.get(date) ?? 0 })),
+    recent: recent.map((s) => ({ ...s, total: Number(s.total) })),
+  };
+}
 
 export default async function DashboardPage() {
-  await requireFeature("dashboard");
+  const session = await requireFeature("dashboard");
+  const canSeeErp = canAccess(await getSessionFeatures(session), "financeiro");
+  const store = canSeeErp && (await getErpDataStatus()).mode === "live" ? await loadStoreSales() : null;
 
   const since30 = startOfDayNDaysAgo(29);
 
@@ -55,7 +84,7 @@ export default async function DashboardPage() {
     const key = dayKey(new Date(s.date));
     dailyMap.set(key, (dailyMap.get(key) ?? 0) + s.total);
   }
-  const trendData = Array.from(dailyMap.entries()).map(([date, value]) => ({ date, value }));
+  const trendData = store?.trend ?? Array.from(dailyMap.entries()).map(([date, value]) => ({ date, value }));
 
   const bairroMap = new Map<string, number>();
   for (const s of sales30) {
@@ -75,14 +104,32 @@ export default async function DashboardPage() {
       </div>
 
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-        <StatTile label="Receita (30 dias)" value={formatCurrency(receita30)} icon={Wallet} />
+        {store ? (
+          <StatTile
+            label="Faturamento (30 dias)"
+            value={formatCurrency(store.summary.receita)}
+            icon={Wallet}
+            hint={`${store.summary.vendas} vendas no ERP · ticket médio ${formatCurrency(store.summary.ticketMedio)}`}
+          />
+        ) : (
+          <StatTile label="Receita (30 dias)" value={formatCurrency(receita30)} icon={Wallet} />
+        )}
         <StatTile label="Clientes ativos" value={String(bucketCounts["30"])} icon={Users} />
-        <StatTile label="Cashback gerado" value={formatCurrency(cashback30)} icon={Percent} />
+        <StatTile
+          label="Cashback gerado"
+          value={formatCurrency(cashback30)}
+          icon={Percent}
+          hint={store ? `sobre ${formatCurrency(receita30)} lançados no CRM` : undefined}
+        />
         <StatTile label="Pontos emitidos" value={compactNumber(pontos30)} icon={Gift} />
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
-        <Card title="Receita por dia" subtitle="Últimos 30 dias" className="lg:col-span-2">
+        <Card
+          title={store ? "Faturamento por dia" : "Receita por dia"}
+          subtitle={store ? "Últimos 30 dias · direto do ERP" : "Últimos 30 dias"}
+          className="lg:col-span-2"
+        >
           <RevenueTrendChart data={trendData} />
         </Card>
 
@@ -131,7 +178,42 @@ export default async function DashboardPage() {
         </Card>
       </div>
 
-      <Card title="Vendas recentes">
+      {store && (
+        <Card title="Últimas vendas da loja" subtitle="Direto do ERP">
+          <div className="overflow-x-auto -mx-5 px-5">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="text-left text-ink-muted border-b border-border">
+                  <th className="font-medium py-2 pr-4">Cliente</th>
+                  <th className="font-medium py-2 pr-4">Vendedor</th>
+                  <th className="font-medium py-2 pr-4 text-right">Valor</th>
+                  <th className="font-medium py-2 text-right">Data</th>
+                </tr>
+              </thead>
+              <tbody>
+                {store.recent.map((s) => (
+                  <tr key={s.id} className="border-b border-border/60 last:border-0">
+                    <td className="py-2.5 pr-4 text-ink-primary">{s.clienteNome?.trim() || "Consumidor final"}</td>
+                    <td className="py-2.5 pr-4 text-ink-secondary">{s.vendedor?.trim() || "—"}</td>
+                    <td className="py-2.5 pr-4 text-right text-ink-primary tabular-nums">{formatCurrency(s.total)}</td>
+                    <td className="py-2.5 text-right text-ink-muted tabular-nums whitespace-nowrap">{formatDateTime(s.data)}</td>
+                  </tr>
+                ))}
+                {store.recent.length === 0 && (
+                  <tr>
+                    <td colSpan={4} className="py-6 text-center text-ink-muted">
+                      Nenhuma venda do ERP ainda.
+                    </td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+        </Card>
+      )}
+
+      {(!store || recentSales.length > 0) && (
+      <Card title={store ? "Vendas lançadas no CRM" : "Vendas recentes"}>
         <div className="overflow-x-auto -mx-5 px-5">
           <table className="w-full text-sm">
             <thead>
@@ -164,6 +246,7 @@ export default async function DashboardPage() {
           </table>
         </div>
       </Card>
+      )}
     </div>
   );
 }
