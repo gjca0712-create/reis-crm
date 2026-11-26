@@ -424,6 +424,9 @@ export async function resolveConversation(conversationId: string) {
   });
   if (!conversation) return;
   redirectIfBlocked(viewer, conversation);
+  // Resultado do atendimento é obrigatório pra finalizar (o botão já fica
+  // travado na tela; aqui vale pra quem clicou numa tela desatualizada).
+  if (!conversation.outcome) redirect(`/admin/whatsapp/suporte?c=${conversationId}&aviso=sem-resultado`);
 
   const { sent, ref }: WaSendResult = SEND_RATING_PROMPT
     ? await sendWhatsAppMessage(toWhatsAppLineId(conversation.line), conversation.customer, RATING_PROMPT)

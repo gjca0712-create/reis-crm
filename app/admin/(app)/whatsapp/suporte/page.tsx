@@ -86,6 +86,7 @@ const AVISOS: Record<string, string> = {
     "A conversa foi marcada como resolvida, mas o pedido de avaliação não foi enviado (linha do WhatsApp desconectada).",
   "avaliacao-numero-invalido":
     "A conversa foi marcada como resolvida, mas o pedido de avaliação não foi enviado (o número de telefone salvo para esse contato é inválido).",
+  "sem-resultado": "Marque o resultado do atendimento (Venda, Orçamento ou Informação) antes de finalizar a conversa.",
   "ja-assumida": "Essa conversa já tinha sido assumida por outro atendente um instante antes.",
   "assumida-por-outro":
     "Essa conversa foi assumida por outro atendente — sua ação não foi aplicada (a resposta não foi enviada).",
@@ -587,16 +588,26 @@ export default async function WhatsappSuportePage({
                       agents={transferAgentOptions}
                     />
                   )}
-                  {active.status === "OPEN" && (
-                    <form action={resolveConversation.bind(null, active.id)}>
-                      <button
-                        type="submit"
-                        className="inline-flex items-center gap-1.5 text-xs text-wa-green hover:brightness-110"
+                  {active.status === "OPEN" &&
+                    (active.outcome ? (
+                      <form action={resolveConversation.bind(null, active.id)}>
+                        <button
+                          type="submit"
+                          className="inline-flex items-center gap-1.5 text-xs text-wa-green hover:brightness-110"
+                        >
+                          <CheckCircle2 className="w-3.5 h-3.5" /> Resolvido
+                        </button>
+                      </form>
+                    ) : (
+                      // Resultado obrigatório pra finalizar: marca Venda/Orçamento/Informação logo abaixo.
+                      <span
+                        className="inline-flex items-center gap-1.5 text-xs text-wa-muted cursor-not-allowed"
+                        title="Marque o resultado do atendimento (Venda, Orçamento ou Informação) para finalizar"
                       >
-                        <CheckCircle2 className="w-3.5 h-3.5" /> Resolvido
-                      </button>
-                    </form>
-                  )}
+                        <CheckCircle2 className="w-3.5 h-3.5 opacity-50" /> Resolvido
+                        <span className="text-[11px]">· marque o resultado abaixo</span>
+                      </span>
+                    ))}
                   <Link
                     href={`/admin/ocorrencias/novo?clienteId=${active.customer.id}`}
                     className="inline-flex items-center gap-1.5 text-xs text-wa-muted hover:text-status-critical"
