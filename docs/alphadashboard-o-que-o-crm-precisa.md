@@ -1,7 +1,8 @@
 # O que o CRM da Reis precisa do AlphaDashboard
 
 O CRM da Reis já busca os dados no AlphaDashboard sozinho (`lib/erp/alpha/`). Ele
-entra com um usuário da Reis e só usa rotas de consulta (`/api/v1/dashboard/*`).
+usa a chave de integração da Reis (`X-API-Key`) ou, sem ela, o login de um
+usuário, e só chama rotas de consulta (`/api/v1/dashboard/*`).
 
 Com as rotas de hoje, já dá para ter:
 
@@ -120,10 +121,13 @@ Hoje o CRM só sabe quando ele mesmo consultou a API. Não sabe se o computador 
    - O endereço está no `Adm.exe.config` (`IpDbPrincipal`, `PortaDbPrincipal`, `EsquemaDbPrincipal`) ou no `user.config` do usuário do Windows.
    - O `erp-sync-reis/descobrir-banco.js` deste repositório acha esse endereço.
 2. **Rodar o Brute Sync** para trazer 12 meses de histórico.
-3. **Criar um usuário só para o CRM** (ex.: `crm.reis`). Ele vai nas variáveis do Railway do CRM:
-   - `ALPHA_DASHBOARD_CNPJ`
-   - `ALPHA_DASHBOARD_LOGIN`
-   - `ALPHA_DASHBOARD_SENHA`
+3. **Gerar a chave de integração da Reis** (`POST /api/v1/admin/api-keys` com o
+   `ADMIN_SUPPORT_TOKEN`, corpo `{ "cnpj": "<CNPJ da Reis>", "nome": "CRM Reis" }`).
+   A chave aparece só uma vez: vai direto na variável `ALPHA_DASHBOARD_CHAVE` do
+   Railway do CRM, sem passar por chat ou e-mail.
+   - Sem a chave, o CRM também entra com um usuário: `ALPHA_DASHBOARD_CNPJ`,
+     `ALPHA_DASHBOARD_LOGIN` e `ALPHA_DASHBOARD_SENHA`. Com a chave preenchida,
+     essas três são ignoradas.
 
 ## Uso da API pelo CRM
 
@@ -134,6 +138,11 @@ Hoje o CRM só sabe quando ele mesmo consultou a API. Não sabe se o computador 
 - conferência de 45 dias de vendas uma vez por dia;
 - histórico de 12 meses só na primeira vez (cerca de 365 consultas).
 
-**Login:** feito uma vez e o token reaproveitado por 24 h. Faz login de novo só ao receber 401.
+**Autenticação:** com a chave, vai o `X-API-Key` em toda chamada. Chave recusada (401)
+espera 15 min antes de tentar de novo. Sem a chave, faz o login uma vez e reaproveita
+o token por 24 h; login de novo só ao receber 401.
 
 **Botão "Atualizar agora":** chama `POST /sync-now`, espera 45 s e busca as vendas do dia.
+- Ponto a confirmar: se o `sync-now` recusar a chave de integração (403), o CRM só
+  registra no log e busca as vendas mesmo assim, sem a sincronização na hora. Seria
+  bom o `sync-now` aceitar a chave.

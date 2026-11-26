@@ -15,7 +15,7 @@
 // então um restart do servidor continua de onde parou.
 import { prisma } from "@/lib/prisma";
 import { pendingSyncRequest } from "../sync-request";
-import { AlphaError, alphaConfig, createAlphaClient, type AlphaClient } from "./client";
+import { ALPHA_ENV_VARS, AlphaError, alphaConfig, createAlphaClient, type AlphaClient } from "./client";
 import { diasAtras, importarContas, importarProdutos, importarVendas } from "./importer";
 import { diaLoja } from "./map";
 
@@ -165,10 +165,14 @@ export async function rodadaAlpha(client: AlphaClient, agora = Date.now()): Prom
 const globalAlpha = globalThis as unknown as { __alphaImport?: boolean };
 
 export function startAlphaImport(): void {
-  const temAlguma = ["ALPHA_DASHBOARD_CNPJ", "ALPHA_DASHBOARD_LOGIN", "ALPHA_DASHBOARD_SENHA"].some((k) => process.env[k]);
+  const temAlguma = ALPHA_ENV_VARS.some((k) => process.env[k]);
   const config = alphaConfig();
   if (!config) {
-    if (temAlguma) console.error("[alpha] variáveis ALPHA_DASHBOARD_* incompletas ou inválidas: importação desligada.");
+    if (temAlguma) {
+      console.error(
+        "[alpha] variáveis ALPHA_DASHBOARD_* incompletas ou inválidas (a chave começa com adk_; sem chave, CNPJ + LOGIN + SENHA): importação desligada."
+      );
+    }
     return;
   }
   if (globalAlpha.__alphaImport) return;
@@ -186,7 +190,7 @@ export function startAlphaImport(): void {
       rodando = false;
     }
   };
-  console.log("[alpha] importação do AlphaDashboard ligada.");
+  console.log(`[alpha] importação do AlphaDashboard ligada (${config.chave !== undefined ? "chave de integração" : "login de usuário"}).`);
   setTimeout(() => void tick(), 20_000).unref();
   setInterval(() => void tick(), TICK_MS).unref();
 }
