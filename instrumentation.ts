@@ -13,5 +13,9 @@ export async function register() {
     // Apaga arquivo de conversa com mais de 20 dias, pro volume não encher.
     const { startMediaCleanup } = await import("@/lib/whatsapp/cleanup");
     startMediaCleanup();
+    // Financeiro/Produtos: busca os dados da loja no AlphaDashboard (só com as
+    // variáveis ALPHA_DASHBOARD_* configuradas).
+    const { startAlphaImport } = await import("@/lib/erp/alpha/loop");
+    startAlphaImport();
   }
 }

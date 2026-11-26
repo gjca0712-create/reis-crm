@@ -44,7 +44,7 @@ export function ErpDataBanner({
           <h2 className="text-base font-semibold text-ink-primary">Ainda não conectado ao ERP</h2>
           <p className="text-sm text-ink-muted mt-1 max-w-lg">
             Esta tela mostra os números do sistema da loja (faturamento, margem, contas a pagar e a receber, estoque)
-            assim que o programa de sincronização for instalado no computador do ERP.
+            assim que a loja for conectada ao ERP.
           </p>
         </div>
         {isCeo ? (
@@ -96,7 +96,7 @@ export function ErpDataBanner({
         {minutes == null
           ? "Sem registro de sincronização com o ERP."
           : stale
-            ? `Última atualização com o ERP ${ago(minutes)} — o programa da loja pode estar parado (computador do ERP desligado ou sem internet).`
+            ? `Última atualização com o ERP ${ago(minutes)} — a ligação com a loja pode estar parada (computador do ERP desligado ou sem internet).`
             : `Atualizado com o ERP ${ago(minutes)}.`}
       </div>
       <SyncNowButton initialPending={syncRequested} />
